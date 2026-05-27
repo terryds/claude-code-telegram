@@ -112,6 +112,22 @@ pm2 save                         # persist the process list
 pm2 startup                      # follow the printed instruction to enable on boot
 ```
 
+**Or, without an ecosystem file** — start directly from the CLI:
+
+```bash
+cd ~/claude-code-telegram
+PORT=3000 pm2 start server/index.ts \
+  --name claude-code-telegram \
+  --interpreter "$(which bun)" \
+  --max-restarts 10 \
+  --restart-delay 3000
+
+pm2 save
+pm2 startup   # follow the printed instruction
+```
+
+`pm2 save` snapshots the env that was current at start time, so the `PORT` value persists across `pm2 resurrect` and reboots. If you change an env var later, restart with `pm2 restart claude-code-telegram --update-env`.
+
 Common pm2 commands:
 
 ```bash
@@ -160,6 +176,22 @@ Create the password file with `sudo htpasswd -c /etc/nginx/.htpasswd youruser`.
 ### 5. Onboard
 
 Visit the dashboard (via tunnel or your domain), complete the three onboarding steps, and you're live. Send your bot any message — it will reach Claude Code on the VPS and reply.
+
+## Updating
+
+When you push a new version, deploy it on the VPS with:
+
+```bash
+cd ~/claude-code-telegram
+git pull
+bun install            # if dependencies changed
+bun run build          # rebuild the client
+pm2 restart claude-code-telegram
+```
+
+`pm2 restart` reuses the saved process config, so you don't need to repeat `pm2 save` unless you changed the start command or env vars (in which case use `pm2 restart claude-code-telegram --update-env` and re-run `pm2 save`).
+
+Your bot token, chat link, and Claude session ID live in `data/app.db` — they survive restarts and code updates.
 
 ## Bot commands
 
