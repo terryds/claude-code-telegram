@@ -166,6 +166,10 @@ Visit the dashboard (via tunnel or your domain), complete the three onboarding s
 - `/start`, `/help` — show usage
 - `/new_session` — start a fresh Claude conversation (forgets prior context)
 
+## Sending photos
+
+Photos are downloaded to `data/incoming/<file_unique_id>.jpg` and the local path is appended to the prompt. Claude views the file with its `Read` tool. The caption (if any) is used as the user message; with no caption the agent is asked to describe the image. Files are not auto-deleted — wipe `data/incoming/` periodically if you don't want them around.
+
 ## Data
 
 Everything is stored in `data/app.db` (SQLite). Two tables:
@@ -173,7 +177,7 @@ Everything is stored in `data/app.db` (SQLite). Two tables:
 - `settings` — key/value store (bot token, chat ID, session ID, relay enabled flag)
 - `message_log` — recent in/out messages shown on the dashboard
 
-To wipe state, stop the process, delete `data/app.db*`, and restart — or use **Reset everything** in the dashboard.
+Photos sent via Telegram land in `data/incoming/` (also gitignored). To wipe state, stop the process, delete `data/app.db*` and `data/incoming/`, and restart — or use **Reset everything** in the dashboard.
 
 ## Security
 

@@ -28,10 +28,20 @@ export type TelegramChat = {
   first_name?: string;
 };
 
+export type TelegramPhotoSize = {
+  file_id: string;
+  file_unique_id: string;
+  file_size?: number;
+  width: number;
+  height: number;
+};
+
 export type TelegramMessage = {
   message_id: number;
   date: number;
   text?: string;
+  caption?: string;
+  photo?: TelegramPhotoSize[];
   chat: TelegramChat;
 };
 
@@ -191,6 +201,36 @@ export async function setMyCommands(
     });
     const data = (await res.json()) as { ok: boolean; description?: string };
     if (!data.ok) return { ok: false, error: data.description || `HTTP ${res.status}` };
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function downloadTelegramFile(
+  fileId: string,
+  destPath: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { botToken } = getTelegramConfig();
+  if (!botToken) return { ok: false, error: 'Bot token not set' };
+  try {
+    const metaRes = await fetch(
+      `https://api.telegram.org/bot${botToken}/getFile?file_id=${encodeURIComponent(fileId)}`
+    );
+    const meta = (await metaRes.json()) as {
+      ok: boolean;
+      result?: { file_path?: string };
+      description?: string;
+    };
+    if (!meta.ok || !meta.result?.file_path) {
+      return { ok: false, error: meta.description || `getFile HTTP ${metaRes.status}` };
+    }
+    const fileRes = await fetch(
+      `https://api.telegram.org/file/bot${botToken}/${meta.result.file_path}`
+    );
+    if (!fileRes.ok) return { ok: false, error: `download HTTP ${fileRes.status}` };
+    const buf = await fileRes.arrayBuffer();
+    await Bun.write(destPath, buf);
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
