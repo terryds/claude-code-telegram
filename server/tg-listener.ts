@@ -1,3 +1,5 @@
+import { mkdirSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { getSetting, setSetting, db, logMessage } from './db.ts';
 import {
   getTelegramConfig,
@@ -6,9 +8,14 @@ import {
   sendTelegramPlain,
   sendChatAction,
   setMyCommands,
+  downloadTelegramFile,
+  type TelegramMessage,
   type TelegramUpdate,
 } from './telegram.ts';
 import { runClaudeHeadless } from './claude-runner.ts';
+
+const INCOMING_DIR = resolve('./data/incoming');
+mkdirSync(INCOMING_DIR, { recursive: true });
 
 const TG_OFFSET_KEY = 'telegram_update_offset';
 const CLAUDE_SESSION_KEY = 'claude_session_id';
@@ -146,7 +153,10 @@ async function processUpdate(upd: TelegramUpdate, expectedChatId: string | null)
   if (!isRelayEnabled()) return;
 
   const text = (msg.text ?? '').trim();
-  if (!text) return;
+  const caption = (msg.caption ?? '').trim();
+  const hasPhoto = Array.isArray(msg.photo) && msg.photo.length > 0;
+
+  if (!text && !hasPhoto) return;
 
   if (text === '/new_session' || text.startsWith('/new_session ')) {
     db.prepare('DELETE FROM settings WHERE key = ?').run(CLAUDE_SESSION_KEY);
@@ -163,6 +173,8 @@ async function processUpdate(upd: TelegramUpdate, expectedChatId: string | null)
         '',
         "Send a message and I'll relay it to Claude Code running on your VPS.",
         '',
+        'You can also send photos (with or without a caption) — they get saved to disk and the file path is passed to Claude.',
+        '',
         'Commands:',
         '  /new_session — start a fresh Claude conversation',
         '  /help — show this message',
@@ -171,13 +183,16 @@ async function processUpdate(upd: TelegramUpdate, expectedChatId: string | null)
     return;
   }
 
-  logMessage({ direction: 'in', text, session_id: getSetting(CLAUDE_SESSION_KEY) });
+  const prompt = hasPhoto ? await buildPhotoPrompt(msg, caption || text) : text;
+  if (!prompt) return;
+
+  logMessage({ direction: 'in', text: prompt, session_id: getSetting(CLAUDE_SESSION_KEY) });
 
   const sessionId = getSetting(CLAUDE_SESSION_KEY);
   console.log(
-    `[tg-listener] → claude (${sessionId ? 'resume ' + sessionId.slice(0, 8) : 'new session'}): ${text.slice(0, 80)}`
+    `[tg-listener] → claude (${sessionId ? 'resume ' + sessionId.slice(0, 8) : 'new session'}): ${prompt.slice(0, 80)}`
   );
-  const result = await withTyping(() => runClaudeHeadless(text, sessionId));
+  const result = await withTyping(() => runClaudeHeadless(prompt, sessionId));
 
   if (result.ok) {
     if (result.session_id) setSetting(CLAUDE_SESSION_KEY, result.session_id);
@@ -201,6 +216,24 @@ async function processUpdate(upd: TelegramUpdate, expectedChatId: string | null)
     });
     await sendTelegram(`⚠️ <b>Claude error</b>\n${escapeHtml(result.error)}`);
   }
+}
+
+async function buildPhotoPrompt(msg: TelegramMessage, userText: string): Promise<string> {
+  const photos = msg.photo ?? [];
+  // Telegram returns photos sorted ascending by size; the largest is best for vision.
+  const largest = photos[photos.length - 1];
+  if (!largest) return userText;
+
+  const ext = '.jpg'; // Telegram always converts photos to JPEG
+  const destPath = resolve(INCOMING_DIR, `${largest.file_unique_id}${ext}`);
+  const dl = await downloadTelegramFile(largest.file_id, destPath);
+  if (!dl.ok) {
+    await sendTelegram(`⚠️ <b>Failed to download photo</b>\n${escapeHtml(dl.error)}`);
+    return '';
+  }
+
+  const ref = `An image was attached at: ${destPath}\nUse your Read tool to view it.`;
+  return userText ? `${ref}\n\n${userText}` : `${ref}\n\nNo caption was provided — describe what you see, or wait for follow-up instructions.`;
 }
 
 function escapeHtml(s: string): string {
