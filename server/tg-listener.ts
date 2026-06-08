@@ -171,15 +171,18 @@ async function loop(): Promise<void> {
     if (r.updates.length === 0) continue;
 
     for (const upd of r.updates) {
+      // Persist offset BEFORE processing so we don't replay this update if
+      // bun is killed mid-process (e.g. by pm2 restart during a long claude
+      // call). Trade-off: in-flight messages get dropped on crash instead of
+      // retried, which is far better than the alternative of infinite replay
+      // when the same message keeps killing the relay.
+      setOffset(upd.update_id + 1);
       try {
         await processUpdate(upd, chatId);
       } catch (err) {
         console.error('[tg-listener] process error:', err);
       }
     }
-
-    const maxId = r.updates.reduce((m, u) => Math.max(m, u.update_id), 0);
-    setOffset(maxId + 1);
   }
 }
 
