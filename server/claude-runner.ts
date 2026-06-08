@@ -1,6 +1,6 @@
 export type ClaudeResult =
   | { ok: true; text: string; session_id: string | null }
-  | { ok: false; error: string };
+  | { ok: false; error: string; aborted?: boolean };
 
 // 10 minutes — long enough for complex tool-calling tasks,
 // short enough to unblock the listener if the process hangs.
@@ -8,8 +8,14 @@ const CLAUDE_TIMEOUT_MS = 10 * 60 * 1000;
 
 export async function runClaudeHeadless(
   prompt: string,
-  sessionId: string | null
+  sessionId: string | null,
+  signal?: AbortSignal
 ): Promise<ClaudeResult> {
+  // Caller already aborted before we even spawned.
+  if (signal?.aborted) {
+    return { ok: false, error: 'Stopped before starting.', aborted: true };
+  }
+
   const args = [
     '-p',
     prompt,
@@ -33,19 +39,34 @@ export async function runClaudeHeadless(
     };
   }
 
+  // SIGTERM the process, then SIGKILL after 3s if it ignores us. Shared by
+  // both the timeout guard and the user-initiated abort below.
+  const spawned = proc;
+  let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+  const killProc = (reason: string): void => {
+    console.log(`[claude-runner] killing claude (PID ${spawned.pid}): ${reason}`);
+    try { spawned.kill(); } catch {}
+    forceKillTimer = setTimeout(() => {
+      try { spawned.kill(9); } catch {}
+    }, 3_000);
+  };
+
   // Guard against Claude finishing work but the process never exiting.
   // When the timeout fires we kill the process, which closes its streams
   // and lets the Promise.all below resolve with whatever was already written.
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
-    console.log(`[claude-runner] killing claude (PID ${proc.pid}) after ${CLAUDE_TIMEOUT_MS / 1000}s timeout`);
-    try { proc.kill(); } catch {}
-    // If SIGTERM doesn't work, force-kill after 3s
-    setTimeout(() => {
-      try { proc.kill(9); } catch {}
-    }, 3_000);
+    killProc(`${CLAUDE_TIMEOUT_MS / 1000}s timeout`);
   }, CLAUDE_TIMEOUT_MS);
+
+  // User-initiated stop (or replacement by a newer prompt).
+  let aborted = false;
+  const onAbort = () => {
+    aborted = true;
+    killProc('aborted by caller');
+  };
+  signal?.addEventListener('abort', onAbort, { once: true });
 
   let stdout: string;
   let stderr: string;
@@ -56,13 +77,19 @@ export async function runClaudeHeadless(
       proc.exited,
     ]);
   } catch (err) {
-    clearTimeout(timer);
     return {
       ok: false,
       error: `claude process error: ${err instanceof Error ? err.message : String(err)}`,
+      aborted,
     };
   } finally {
     clearTimeout(timer);
+    if (forceKillTimer) clearTimeout(forceKillTimer);
+    signal?.removeEventListener('abort', onAbort);
+  }
+
+  if (aborted) {
+    return { ok: false, error: 'Stopped by user.', aborted: true };
   }
 
   if (timedOut) {

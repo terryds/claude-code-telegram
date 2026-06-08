@@ -73,17 +73,6 @@ async function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function withTyping<T>(fn: () => Promise<T>): Promise<T> {
-  await sendChatAction('typing');
-  const interval = setInterval(() => {
-    sendChatAction('typing').catch(() => {});
-  }, 4000);
-  try {
-    return await fn();
-  } finally {
-    clearInterval(interval);
-  }
-}
 
 // ── Live step streaming ─────────────────────────────────────────────
 
@@ -128,23 +117,108 @@ async function sendStep(step: ClaudeStep): Promise<void> {
   if (!r.ok) console.error(`[tg-listener] step send failed: ${r.error}`);
 }
 
+// ── Active run tracking ─────────────────────────────────────────────
+//
+// The poll loop must keep receiving updates while Claude works, so a run
+// executes in the background (not awaited by the loop) and registers itself
+// here. A `/stop` command — or a new prompt (auto-stop & replace) — aborts it.
+
+type ActiveRun = { abort: AbortController; stop: () => void };
+let activeRun: ActiveRun | null = null;
+
 /**
- * Run Claude with live step-by-step output to Telegram.
- * Watches the JSONL session file while claude-runner executes.
+ * Abort the current run, if any, and stop its stream watcher synchronously so
+ * it can't overlap with a replacement run on the same session file.
+ * Returns true if a run was actually stopped.
  */
-async function runClaudeWithStream(
-  prompt: string,
-  sessionId: string | null,
-): ReturnType<typeof runClaudeHeadless> {
-  const sid = sessionId ?? 'unknown';
-  const stopWatch = await watchSession(sid, sendStep);
-  try {
-    return await runClaudeHeadless(prompt, sessionId);
-  } finally {
-    // Small delay to catch final writes before closing
-    await new Promise(r => setTimeout(r, 1000));
-    stopWatch();
+function stopActiveRun(): boolean {
+  const run = activeRun;
+  if (!run) return false;
+  activeRun = null; // claim it so the run's own cleanup won't double-clear
+  run.abort.abort();
+  run.stop();
+  return true;
+}
+
+/**
+ * Run Claude in the background with live step-by-step output to Telegram,
+ * watching the JSONL session file while claude-runner executes. Does not block
+ * the caller — the poll loop stays free to receive /stop and new messages.
+ */
+function startClaudeRun(prompt: string, sessionId: string | null): void {
+  // Auto-stop & replace: cancel whatever is already running.
+  stopActiveRun();
+
+  const abort = new AbortController();
+  const run: ActiveRun = { abort, stop: () => {} };
+  activeRun = run;
+
+  void (async () => {
+    const sid = sessionId ?? 'unknown';
+    const stopWatch = await watchSession(sid, sendStep);
+    let watcherStopped = false;
+    run.stop = () => {
+      if (watcherStopped) return;
+      watcherStopped = true;
+      stopWatch();
+    };
+    // If we were aborted while the watcher was starting up, stop immediately.
+    if (abort.signal.aborted) run.stop();
+
+    await sendChatAction('typing');
+    const typing = setInterval(() => {
+      sendChatAction('typing').catch(() => {});
+    }, 4000);
+
+    let result: Awaited<ReturnType<typeof runClaudeHeadless>>;
+    try {
+      result = await runClaudeHeadless(prompt, sessionId, abort.signal);
+    } finally {
+      clearInterval(typing);
+      // Give the watcher a beat to flush final writes — but not when aborted,
+      // since a replacement run may already be watching the same file.
+      if (!abort.signal.aborted) await sleep(1000);
+      run.stop();
+      if (activeRun === run) activeRun = null;
+    }
+
+    await deliverResult(result);
+  })().catch((err) => {
+    console.error('[tg-listener] claude run crashed:', err);
+    if (activeRun === run) activeRun = null;
+  });
+}
+
+/** Send Claude's result (or error) back to Telegram and log it. */
+async function deliverResult(
+  result: Awaited<ReturnType<typeof runClaudeHeadless>>,
+): Promise<void> {
+  if (result.ok) {
+    if (result.session_id) setSetting(CLAUDE_SESSION_KEY, result.session_id);
+    const body = result.text || '(Claude returned an empty response)';
+    const r = await sendTelegramPlain(body);
+    logMessage({
+      direction: 'out',
+      text: body,
+      session_id: result.session_id,
+      ok: r.ok,
+      error: r.error ?? null,
+    });
+    if (!r.ok) console.error(`[tg-listener] send failed: ${r.error}`);
+    return;
   }
+
+  logMessage({
+    direction: 'out',
+    text: '',
+    session_id: null,
+    ok: false,
+    error: result.error,
+  });
+  // Aborted runs were stopped on purpose; the /stop or replacement message
+  // already acknowledged that, so don't surface a scary error.
+  if (result.aborted) return;
+  await sendTelegram(`⚠️ <b>Claude error</b>\n${escapeHtml(result.error)}`);
 }
 
 async function loop(): Promise<void> {
@@ -224,6 +298,15 @@ async function processUpdate(upd: TelegramUpdate, expectedChatId: string | null)
 
   if (!text && !hasPhoto) return;
 
+  if (text === '/stop' || text.startsWith('/stop ')) {
+    if (stopActiveRun()) {
+      await sendTelegram('🛑 <b>Stopped.</b> Claude was interrupted.');
+    } else {
+      await sendTelegram('💤 Nothing is running right now.');
+    }
+    return;
+  }
+
   if (text === '/new_session' || text.startsWith('/new_session ')) {
     db.prepare('DELETE FROM settings WHERE key = ?').run(CLAUDE_SESSION_KEY);
     await sendTelegram(
@@ -242,6 +325,7 @@ async function processUpdate(upd: TelegramUpdate, expectedChatId: string | null)
         'You can also send photos (with or without a caption) — they get saved to disk and the file path is passed to Claude.',
         '',
         'Commands:',
+        '  /stop — interrupt Claude while it\'s working',
         '  /new_session — start a fresh Claude conversation',
         '  /help — show this message',
       ].join('\n')
@@ -255,33 +339,19 @@ async function processUpdate(upd: TelegramUpdate, expectedChatId: string | null)
   logMessage({ direction: 'in', text: prompt, session_id: getSetting(CLAUDE_SESSION_KEY) });
 
   const sessionId = getSetting(CLAUDE_SESSION_KEY);
+
+  // Auto-stop & replace: a fresh prompt cancels whatever is still running.
+  if (activeRun) {
+    await sendTelegram('🛑 Stopping the previous task and starting the new one…');
+  }
+
   console.log(
     `[tg-listener] → claude (${sessionId ? 'resume ' + sessionId.slice(0, 8) : 'new session'}): ${prompt.slice(0, 80)}`
   );
-  const result = await withTyping(() => runClaudeWithStream(prompt, sessionId));
 
-  if (result.ok) {
-    if (result.session_id) setSetting(CLAUDE_SESSION_KEY, result.session_id);
-    const body = result.text || '(Claude returned an empty response)';
-    const r = await sendTelegramPlain(body);
-    logMessage({
-      direction: 'out',
-      text: body,
-      session_id: result.session_id,
-      ok: r.ok,
-      error: r.error ?? null,
-    });
-    if (!r.ok) console.error(`[tg-listener] send failed: ${r.error}`);
-  } else {
-    logMessage({
-      direction: 'out',
-      text: '',
-      session_id: null,
-      ok: false,
-      error: result.error,
-    });
-    await sendTelegram(`⚠️ <b>Claude error</b>\n${escapeHtml(result.error)}`);
-  }
+  // Fire-and-forget: the run streams its own output and the poll loop stays
+  // free to receive /stop and further messages.
+  startClaudeRun(prompt, sessionId);
 }
 
 async function buildPhotoPrompt(msg: TelegramMessage, userText: string): Promise<string> {
@@ -308,6 +378,7 @@ function escapeHtml(s: string): string {
 
 export async function applyBotCommands(): Promise<void> {
   await setMyCommands([
+    { command: 'stop', description: 'Interrupt Claude while it is working' },
     { command: 'new_session', description: 'Start a new Claude conversation' },
     { command: 'help', description: 'Show usage' },
   ]);
