@@ -26,13 +26,13 @@ export function Dashboard({ status, onChange }: Props) {
     return () => window.clearInterval(id);
   }, []);
 
-  // Stick to the bottom (newest) as new events stream in, but only if the user
-  // is already near the bottom — don't yank them away while scrolled up.
+  // Newest events render at the top. Keep the view pinned there as they stream
+  // in, but only if the user is already near the top — don't yank them back up
+  // while they're scrolled down reading older activity.
   useEffect(() => {
     const el = feedRef.current;
     if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    if (nearBottom) el.scrollTop = el.scrollHeight;
+    if (el.scrollTop < 120) el.scrollTop = 0;
   }, [events]);
 
   const toggleRelay = async () => {

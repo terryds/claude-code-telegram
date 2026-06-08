@@ -137,8 +137,7 @@ export type FeedEvent =
 
 /**
  * Merged, time-ordered feed of messages and steps — the dashboard equivalent of
- * the live Telegram stream. Returns the most recent `limit` events in
- * chronological (oldest-first) order.
+ * the live Telegram stream. Returns the most recent `limit` events newest-first.
  */
 export function recentFeed(limit = 300): FeedEvent[] {
   const rows = db
@@ -170,8 +169,8 @@ export function recentFeed(limit = 300): FeedEvent[] {
     error: string | null;
   }>;
 
-  // Query is newest-first for the LIMIT; flip to chronological for display.
-  return rows.reverse().map((r): FeedEvent =>
+  // Already newest-first from the query.
+  return rows.map((r): FeedEvent =>
     r.etype === 'message'
       ? {
           etype: 'message',
