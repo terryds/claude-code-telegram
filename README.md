@@ -215,7 +215,17 @@ setsid nohup bash -c '
 ## Bot commands
 
 - `/start`, `/help` — show usage
+- `/stop` — interrupt Claude while it's working (kills the in-flight run)
 - `/new_session` — start a fresh Claude conversation (forgets prior context)
+
+### Interrupting a run
+
+Claude streams its progress (thinking, tool calls, results) back to the chat as it works, and the listener keeps receiving messages the whole time. To interrupt:
+
+- Send `/stop` to cancel the current run and leave things idle.
+- Send a new prompt while Claude is still working — it auto-stops the running task and starts the new one (auto-stop & replace).
+
+Stopping is a hard process kill: any file edits Claude already made stay on disk, only the in-flight turn is cut. The interrupted turn isn't saved to the session, so the next message resumes from the last *completed* turn.
 
 ## Sending photos
 
