@@ -193,6 +193,25 @@ pm2 restart claude-code-telegram
 
 Your bot token, chat link, and Claude session ID live in `data/app.db` — they survive restarts and code updates.
 
+### Updating from a Telegram chat
+
+If you're asking the relayed Claude itself to update the project (i.e. via Telegram), the plain `pm2 restart` step above won't work: it kills the `bun` process hosting your conversation, which kills the spawned `claude`, which aborts the in-flight tool — the update half-finishes and your reply is lost.
+
+Detach the work into its own process group with a short delay so the current reply flushes first:
+
+```bash
+setsid nohup bash -c '
+  sleep 6
+  cd ~/claude-code-telegram
+  git pull --ff-only
+  bun install
+  bun run build
+  pm2 restart claude-code-telegram
+' >/dev/null 2>&1 < /dev/null &
+```
+
+`setsid + nohup + &` keep the script alive after `pm2 restart` kills its caller; the `sleep 6` gives the in-flight reply time to flush. Wrap it in a helper script if you do this often (see `CLAUDE.md` for the convention this repo uses).
+
 ## Bot commands
 
 - `/start`, `/help` — show usage
