@@ -2,9 +2,7 @@ export type ClaudeResult =
   | { ok: true; text: string; session_id: string | null }
   | { ok: false; error: string; aborted?: boolean };
 
-// 10 minutes — long enough for complex tool-calling tasks,
-// short enough to unblock the listener if the process hangs.
-const CLAUDE_TIMEOUT_MS = 10 * 60 * 1000;
+const CLAUDE_TIMEOUT_MS = Number(Bun.env.CLAUDE_TIMEOUT_MS || '0');
 
 export async function runClaudeHeadless(
   prompt: string,
@@ -51,14 +49,15 @@ export async function runClaudeHeadless(
     }, 3_000);
   };
 
-  // Guard against Claude finishing work but the process never exiting.
-  // When the timeout fires we kill the process, which closes its streams
-  // and lets the Promise.all below resolve with whatever was already written.
+  // Optional guard against Claude finishing work but the process never exiting.
+  // Disabled by default; set CLAUDE_TIMEOUT_MS to a positive value to enable it.
   let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    killProc(`${CLAUDE_TIMEOUT_MS / 1000}s timeout`);
-  }, CLAUDE_TIMEOUT_MS);
+  const timer = CLAUDE_TIMEOUT_MS > 0
+    ? setTimeout(() => {
+        timedOut = true;
+        killProc(`${CLAUDE_TIMEOUT_MS / 1000}s timeout`);
+      }, CLAUDE_TIMEOUT_MS)
+    : undefined;
 
   // User-initiated stop (or replacement by a newer prompt).
   let aborted = false;
@@ -83,7 +82,7 @@ export async function runClaudeHeadless(
       aborted,
     };
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
     if (forceKillTimer) clearTimeout(forceKillTimer);
     signal?.removeEventListener('abort', onAbort);
   }
