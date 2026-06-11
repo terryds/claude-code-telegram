@@ -12,7 +12,7 @@ import {
   type TelegramMessage,
   type TelegramUpdate,
 } from './telegram.ts';
-import { runClaudeHeadless } from './claude-runner.ts';
+import { runClaudeHeadless, type AskQuestion } from './claude-runner.ts';
 import { watchSession, type ClaudeStep } from './claude-stream.ts';
 
 const INCOMING_DIR = resolve('./data/incoming');
@@ -83,6 +83,9 @@ function formatStep(step: ClaudeStep): string {
     case 'thinking':
       return `🧠 <i>thinking…</i>`;
     case 'tool_use': {
+      // AskUserQuestion is rendered cleanly at the end by deliverResult;
+      // skip its raw JSON step so we don't show the question twice.
+      if (step.toolName === 'AskUserQuestion') return '';
       const name = escapeHtml(step.toolName ?? '?');
       const input = escapeHtml(step.toolInput ?? '');
       return `🛠 <b>${name}</b>\n<pre>${input.slice(0, MAX_TG - 200)}</pre>`;
@@ -202,6 +205,23 @@ async function deliverResult(
 ): Promise<void> {
   if (result.ok) {
     if (result.session_id) setSetting(CLAUDE_SESSION_KEY, result.session_id);
+    // Claude asked a question. Headless mode auto-cancels it, so the result
+    // text is just a "question canceled" notice — suppress that and instead
+    // show the question + options as text. The user answers by typing back,
+    // which resumes the session via the normal message flow.
+    if (result.questions && result.questions.length > 0) {
+      const body = formatQuestions(result.questions);
+      const r = await sendTelegram(body);
+      logMessage({
+        direction: 'out',
+        text: body,
+        session_id: result.session_id,
+        ok: r.ok,
+        error: r.error ?? null,
+      });
+      if (!r.ok) console.error(`[tg-listener] question send failed: ${r.error}`);
+      return;
+    }
     const body = result.text || '(Claude returned an empty response)';
     const r = await sendTelegramPlain(body);
     logMessage({
@@ -226,6 +246,24 @@ async function deliverResult(
   // already acknowledged that, so don't surface a scary error.
   if (result.aborted) return;
   await sendTelegram(`⚠️ <b>Claude error</b>\n${escapeHtml(result.error)}`);
+}
+
+/** Render AskUserQuestion(s) as a text prompt the user can answer by typing. */
+function formatQuestions(questions: AskQuestion[]): string {
+  const parts: string[] = ['❓ <b>Claude needs your input</b>'];
+  questions.forEach((q, i) => {
+    const num = questions.length > 1 ? `${i + 1}. ` : '';
+    parts.push('');
+    parts.push(`${num}<b>${escapeHtml(q.question)}</b>`);
+    if (q.multiSelect) parts.push('<i>(you can pick more than one)</i>');
+    for (const opt of q.options) {
+      const desc = opt.description ? ` — ${escapeHtml(opt.description)}` : '';
+      parts.push(`• <b>${escapeHtml(opt.label)}</b>${desc}`);
+    }
+  });
+  parts.push('');
+  parts.push('<i>Reply with your choice (or type anything else).</i>');
+  return parts.join('\n');
 }
 
 async function loop(): Promise<void> {

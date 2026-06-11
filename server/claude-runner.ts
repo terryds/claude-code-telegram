@@ -1,5 +1,13 @@
+export type AskQuestionOption = { label: string; description?: string };
+export type AskQuestion = {
+  question: string;
+  header?: string;
+  multiSelect?: boolean;
+  options: AskQuestionOption[];
+};
+
 export type ClaudeResult =
-  | { ok: true; text: string; session_id: string | null }
+  | { ok: true; text: string; session_id: string | null; questions?: AskQuestion[] }
   | { ok: false; error: string; aborted?: boolean };
 
 const CLAUDE_TIMEOUT_MS = Number(Bun.env.CLAUDE_TIMEOUT_MS || '0');
@@ -108,6 +116,38 @@ export async function runClaudeHeadless(
   return tryParseOutput(stdout, stderr);
 }
 
+/**
+ * In headless mode the CLI auto-denies AskUserQuestion (there's no interactive
+ * UI), but the structured question is preserved in `permission_denials`. Pull
+ * any out so the caller can render them as text for the user to answer.
+ */
+function extractQuestions(
+  denials?: Array<{ tool_name?: string; tool_input?: any }>,
+): AskQuestion[] | undefined {
+  if (!Array.isArray(denials)) return undefined;
+  const questions: AskQuestion[] = [];
+  for (const d of denials) {
+    if (d?.tool_name !== 'AskUserQuestion') continue;
+    const qs = d.tool_input?.questions;
+    if (!Array.isArray(qs)) continue;
+    for (const q of qs) {
+      if (!q || typeof q.question !== 'string') continue;
+      const options = Array.isArray(q.options)
+        ? q.options
+            .filter((o: any) => o && typeof o.label === 'string')
+            .map((o: any) => ({ label: o.label, description: o.description }))
+        : [];
+      questions.push({
+        question: q.question,
+        header: typeof q.header === 'string' ? q.header : undefined,
+        multiSelect: Boolean(q.multiSelect),
+        options,
+      });
+    }
+  }
+  return questions.length > 0 ? questions : undefined;
+}
+
 function tryParseOutput(
   stdout: string,
   stderr?: string,
@@ -117,6 +157,7 @@ function tryParseOutput(
       result?: string;
       session_id?: string;
       is_error?: boolean;
+      permission_denials?: Array<{ tool_name?: string; tool_input?: any }>;
     };
     if (parsed.is_error) {
       return { ok: false, error: parsed.result || 'claude reported an error' };
@@ -125,6 +166,7 @@ function tryParseOutput(
       ok: true,
       text: (parsed.result ?? '').trim(),
       session_id: parsed.session_id ?? null,
+      questions: extractQuestions(parsed.permission_denials),
     };
   } catch (err) {
     return {
