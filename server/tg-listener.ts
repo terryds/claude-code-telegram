@@ -1,5 +1,5 @@
 import { mkdirSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { extname, join, resolve } from 'node:path';
 import { getSetting, setSetting, db, logMessage, logStep } from './db.ts';
 import {
   getTelegramConfig,
@@ -17,6 +17,9 @@ import { watchSession, type ClaudeStep } from './claude-stream.ts';
 
 const INCOMING_DIR = resolve('./data/incoming');
 mkdirSync(INCOMING_DIR, { recursive: true });
+
+// Telegram's Bot API will not let bots download files larger than 20 MB.
+const TG_FILE_LIMIT = 20 * 1024 * 1024;
 
 const TG_OFFSET_KEY = 'telegram_update_offset';
 const CLAUDE_SESSION_KEY = 'claude_session_id';
@@ -340,8 +343,9 @@ async function processUpdate(upd: TelegramUpdate, expectedChatId: string | null)
   const text = (msg.text ?? '').trim();
   const caption = (msg.caption ?? '').trim();
   const hasPhoto = Array.isArray(msg.photo) && msg.photo.length > 0;
+  const video = extractVideo(msg);
 
-  if (!text && !hasPhoto) return;
+  if (!text && !hasPhoto && !video) return;
 
   if (text === '/stop' || text.startsWith('/stop ')) {
     if (stopActiveRun()) {
@@ -368,6 +372,7 @@ async function processUpdate(upd: TelegramUpdate, expectedChatId: string | null)
         "Send a message and I'll relay it to Claude Code running on your VPS.",
         '',
         'You can also send photos (with or without a caption) — they get saved to disk and the file path is passed to Claude.',
+        'Videos and video notes work the same way — they get saved to disk and the file path is passed to Claude.',
         '',
         'Commands:',
         '  /stop — interrupt Claude while it\'s working',
@@ -378,7 +383,14 @@ async function processUpdate(upd: TelegramUpdate, expectedChatId: string | null)
     return;
   }
 
-  const prompt = hasPhoto ? await buildPhotoPrompt(msg, caption || text) : text;
+  let prompt: string;
+  if (video) {
+    prompt = await buildVideoPrompt(msg, video, caption || text);
+  } else if (hasPhoto) {
+    prompt = await buildPhotoPrompt(msg, caption || text);
+  } else {
+    prompt = text;
+  }
   if (!prompt) return;
 
   logMessage({ direction: 'in', text: prompt, session_id: getSetting(CLAUDE_SESSION_KEY) });
@@ -415,6 +427,87 @@ async function buildPhotoPrompt(msg: TelegramMessage, userText: string): Promise
 
   const ref = `An image was attached at: ${destPath}\nUse your Read tool to view it.`;
   return userText ? `${ref}\n\n${userText}` : `${ref}\n\nNo caption was provided — describe what you see, or wait for follow-up instructions.`;
+}
+
+// ── Video ───────────────────────────────────────────────────────────
+//
+// Like photos, videos are downloaded to disk and the local path is handed to
+// Claude — no pre-processing. The agent decides what to do with it (extract
+// frames, pull the audio, transcribe, etc.) using its own tools.
+// Covers video, video_note, animation, and video/* documents.
+
+type VideoAttachment = {
+  file_id: string;
+  file_unique_id: string;
+  hint_ext: string;
+  size: number;
+};
+
+function extractVideo(msg: TelegramMessage): VideoAttachment | null {
+  if (msg.video) {
+    return {
+      file_id: msg.video.file_id,
+      file_unique_id: msg.video.file_unique_id,
+      hint_ext: '.mp4',
+      size: msg.video.file_size ?? 0,
+    };
+  }
+  if (msg.video_note) {
+    return {
+      file_id: msg.video_note.file_id,
+      file_unique_id: msg.video_note.file_unique_id,
+      hint_ext: '.mp4',
+      size: msg.video_note.file_size ?? 0,
+    };
+  }
+  if (msg.animation) {
+    return {
+      file_id: msg.animation.file_id,
+      file_unique_id: msg.animation.file_unique_id,
+      hint_ext: '.mp4',
+      size: msg.animation.file_size ?? 0,
+    };
+  }
+  if (msg.document && msg.document.mime_type && msg.document.mime_type.startsWith('video/')) {
+    const ext = msg.document.file_name ? extname(msg.document.file_name) : '';
+    return {
+      file_id: msg.document.file_id,
+      file_unique_id: msg.document.file_unique_id,
+      hint_ext: ext || '.mp4',
+      size: msg.document.file_size ?? 0,
+    };
+  }
+  return null;
+}
+
+/**
+ * Download a video and return a Claude prompt that points at the local file —
+ * mirrors buildPhotoPrompt. Returns '' if we already replied with an error
+ * (too big, or download failed).
+ */
+async function buildVideoPrompt(
+  msg: TelegramMessage,
+  video: VideoAttachment,
+  userText: string
+): Promise<string> {
+  if (video.size > TG_FILE_LIMIT) {
+    await sendTelegram(
+      "🎥 <b>Video received, but it's too big.</b>\nTelegram bots can only download files up to 20 MB."
+    );
+    return '';
+  }
+
+  const destPath = join(INCOMING_DIR, `${video.file_unique_id}${video.hint_ext}`);
+  const dl = await downloadTelegramFile(video.file_id, destPath);
+  if (!dl.ok) {
+    await sendTelegram(`⚠️ <b>Failed to download video</b>\n${escapeHtml(dl.error)}`);
+    return '';
+  }
+
+  const ref = `A video was attached at: ${destPath}\nIt's a video file — use your tools to inspect it (e.g. extract frames or audio with ffmpeg) as needed.`;
+  return userText
+    ? `${ref}\n\n${userText}`
+    : `${ref}\n\nNo caption was provided — figure out what the user wants, or wait for follow-up instructions.`;
 }
 
 function escapeHtml(s: string): string {

@@ -36,12 +36,45 @@ export type TelegramPhotoSize = {
   height: number;
 };
 
+export type TelegramVideo = {
+  file_id: string;
+  file_unique_id: string;
+  width: number;
+  height: number;
+  duration: number;
+  mime_type?: string;
+  file_name?: string;
+  file_size?: number;
+};
+
+// Round "video note" messages carry the same fields we care about, so they
+// reuse the video shape (no width/height, but file_id + duration + size).
+export type TelegramVideoNote = {
+  file_id: string;
+  file_unique_id: string;
+  length?: number;
+  duration: number;
+  file_size?: number;
+};
+
+export type TelegramDocument = {
+  file_id: string;
+  file_unique_id: string;
+  file_name?: string;
+  mime_type?: string;
+  file_size?: number;
+};
+
 export type TelegramMessage = {
   message_id: number;
   date: number;
   text?: string;
   caption?: string;
   photo?: TelegramPhotoSize[];
+  video?: TelegramVideo;
+  video_note?: TelegramVideoNote;
+  animation?: TelegramVideo;
+  document?: TelegramDocument;
   chat: TelegramChat;
 };
 

@@ -231,6 +231,10 @@ Stopping is a hard process kill: any file edits Claude already made stay on disk
 
 Photos are downloaded to `data/incoming/<file_unique_id>.jpg` and the local path is appended to the prompt. Claude views the file with its `Read` tool. The caption (if any) is used as the user message; with no caption the agent is asked to describe the image. Files are not auto-deleted — wipe `data/incoming/` periodically if you don't want them around.
 
+## Sending videos
+
+Videos, round video notes, animations, and `video/*` documents work just like photos: the file is downloaded to `data/incoming/<file_unique_id>` and its local path is appended to the prompt. Claude decides what to do with it using its own tools (extract frames or audio with `ffmpeg`, etc.) — nothing is pre-processed. The caption (if any) is used as the user message. Telegram bots can't download files larger than 20 MB, so bigger videos are rejected.
+
 ## Data
 
 Everything is stored in `data/app.db` (SQLite). Two tables:
