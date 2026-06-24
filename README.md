@@ -1,4 +1,4 @@
-# claude-code-telegram
+# coding-agent-telegram-relay
 
 A tiny relay that forwards Telegram messages to a coding agent — [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) **or** [Codex](https://developers.openai.com/codex/cli) — running on your VPS, and sends the agent's response back. Single-user, self-hosted, no external services beyond Telegram and your local CLI.
 
@@ -79,8 +79,8 @@ claude
 
 ```bash
 cd ~
-git clone <your-fork-url> claude-code-telegram
-cd claude-code-telegram
+git clone <your-fork-url> coding-agent-telegram-relay
+cd coding-agent-telegram-relay
 bun install
 bun run build
 ```
@@ -94,10 +94,10 @@ Create an ecosystem file so pm2 uses Bun as the interpreter:
 module.exports = {
   apps: [
     {
-      name: 'claude-code-telegram',
+      name: 'coding-agent-telegram-relay',
       script: 'server/index.ts',
       interpreter: '/home/YOUR_USER/.bun/bin/bun',
-      cwd: '/home/YOUR_USER/claude-code-telegram',
+      cwd: '/home/YOUR_USER/coding-agent-telegram-relay',
       env: {
         PORT: '3000',
       },
@@ -112,7 +112,7 @@ Replace `YOUR_USER` and verify the Bun path with `which bun`.
 
 ```bash
 pm2 start ecosystem.config.cjs
-pm2 logs claude-code-telegram   # tail logs
+pm2 logs coding-agent-telegram-relay   # tail logs
 pm2 save                         # persist the process list
 pm2 startup                      # follow the printed instruction to enable on boot
 ```
@@ -120,9 +120,9 @@ pm2 startup                      # follow the printed instruction to enable on b
 **Or, without an ecosystem file** — start directly from the CLI:
 
 ```bash
-cd ~/claude-code-telegram
+cd ~/coding-agent-telegram-relay
 PORT=3000 pm2 start server/index.ts \
-  --name claude-code-telegram \
+  --name coding-agent-telegram-relay \
   --interpreter "$(which bun)" \
   --max-restarts 10 \
   --restart-delay 3000
@@ -131,15 +131,15 @@ pm2 save
 pm2 startup   # follow the printed instruction
 ```
 
-`pm2 save` snapshots the env that was current at start time, so the `PORT` value persists across `pm2 resurrect` and reboots. If you change an env var later, restart with `pm2 restart claude-code-telegram --update-env`.
+`pm2 save` snapshots the env that was current at start time, so the `PORT` value persists across `pm2 resurrect` and reboots. If you change an env var later, restart with `pm2 restart coding-agent-telegram-relay --update-env`.
 
 Common pm2 commands:
 
 ```bash
 pm2 status
-pm2 restart claude-code-telegram
-pm2 stop claude-code-telegram
-pm2 logs claude-code-telegram --lines 200
+pm2 restart coding-agent-telegram-relay
+pm2 stop coding-agent-telegram-relay
+pm2 logs coding-agent-telegram-relay --lines 200
 ```
 
 ### 4. Expose the dashboard
@@ -187,14 +187,14 @@ Visit the dashboard (via tunnel or your domain), complete the three onboarding s
 When you push a new version, deploy it on the VPS with:
 
 ```bash
-cd ~/claude-code-telegram
+cd ~/coding-agent-telegram-relay
 git pull
 bun install            # if dependencies changed
 bun run build          # rebuild the client
-pm2 restart claude-code-telegram
+pm2 restart coding-agent-telegram-relay
 ```
 
-`pm2 restart` reuses the saved process config, so you don't need to repeat `pm2 save` unless you changed the start command or env vars (in which case use `pm2 restart claude-code-telegram --update-env` and re-run `pm2 save`).
+`pm2 restart` reuses the saved process config, so you don't need to repeat `pm2 save` unless you changed the start command or env vars (in which case use `pm2 restart coding-agent-telegram-relay --update-env` and re-run `pm2 save`).
 
 Your bot token, chat link, and Claude session ID live in `data/app.db` — they survive restarts and code updates.
 
@@ -207,11 +207,11 @@ Detach the work into its own process group with a short delay so the current rep
 ```bash
 setsid nohup bash -c '
   sleep 6
-  cd ~/claude-code-telegram
+  cd ~/coding-agent-telegram-relay
   git pull --ff-only
   bun install
   bun run build
-  pm2 restart claude-code-telegram
+  pm2 restart coding-agent-telegram-relay
 ' >/dev/null 2>&1 < /dev/null &
 ```
 
