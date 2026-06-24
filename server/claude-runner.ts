@@ -1,16 +1,26 @@
-export type AskQuestionOption = { label: string; description?: string };
-export type AskQuestion = {
-  question: string;
-  header?: string;
-  multiSelect?: boolean;
-  options: AskQuestionOption[];
-};
+import type {
+  AskQuestion,
+  Engine,
+  EngineCheck,
+  EngineResult,
+  OnStep,
+} from './engine.ts';
+import { ENGINE_LABELS } from './engine.ts';
+import { watchSession } from './claude-stream.ts';
 
-export type ClaudeResult =
-  | { ok: true; text: string; session_id: string | null; questions?: AskQuestion[] }
-  | { ok: false; error: string; aborted?: boolean };
+// Kept as aliases for back-compat with existing imports across the server.
+export type {
+  AskQuestion,
+  AskQuestionOption,
+} from './engine.ts';
+export type ClaudeResult = EngineResult;
+export type ClaudeCheck = EngineCheck;
 
 const CLAUDE_TIMEOUT_MS = Number(Bun.env.CLAUDE_TIMEOUT_MS || '0');
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 export async function runClaudeHeadless(
   prompt: string,
@@ -176,13 +186,6 @@ function tryParseOutput(
   }
 }
 
-export type ClaudeCheck = {
-  installed: boolean;
-  version?: string;
-  path?: string;
-  error?: string;
-};
-
 export async function checkClaudeInstalled(): Promise<ClaudeCheck> {
   let versionProc;
   try {
@@ -229,3 +232,41 @@ export async function checkClaudeInstalled(): Promise<ClaudeCheck> {
     path: pathStr,
   };
 }
+
+/**
+ * Claude Code engine. Live steps come from tailing the JSONL session file
+ * Claude writes to ~/.claude/projects/… (see claude-stream), which runs
+ * alongside the headless `claude -p` invocation.
+ */
+export const claudeEngine: Engine = {
+  id: 'claude',
+  label: ENGINE_LABELS.claude,
+  check: checkClaudeInstalled,
+  async run(prompt, sessionId, signal, onStep: OnStep): Promise<EngineResult> {
+    // The JSONL file is named after the session id. On a brand-new session we
+    // don't know it yet, so live streaming only kicks in once a session exists
+    // (same limitation as before this was an engine).
+    const sid = sessionId ?? 'unknown';
+    const stopWatch = await watchSession(sid, onStep);
+    let watchStopped = false;
+    const stop = () => {
+      if (watchStopped) return;
+      watchStopped = true;
+      stopWatch();
+    };
+    // Stop the watcher synchronously the moment we're aborted, so a replacement
+    // run can't end up with two watchers tailing the same file.
+    if (signal?.aborted) stop();
+    else signal?.addEventListener('abort', stop, { once: true });
+
+    try {
+      const result = await runClaudeHeadless(prompt, sessionId, signal);
+      // Give the watcher a beat to flush final writes — but not when aborted,
+      // since a replacement run may already be watching the same file.
+      if (!signal?.aborted) await sleep(1000);
+      return result;
+    } finally {
+      stop();
+    }
+  },
+};

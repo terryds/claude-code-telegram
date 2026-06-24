@@ -1,13 +1,27 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
-import { api, type ClaudeCheck, type Status, type BotInfo } from '../api';
+import { api, type AgentCheck, type EngineId, type Status, type BotInfo } from '../api';
 
 type Props = { status: Status; onChange: () => void };
+
+const INSTALL_DOCS: Record<EngineId, { label: string; cli: string; href: string }> = {
+  claude: {
+    label: 'Claude Code',
+    cli: 'claude',
+    href: 'https://docs.claude.com/en/docs/claude-code/overview',
+  },
+  codex: {
+    label: 'Codex',
+    cli: 'codex',
+    href: 'https://developers.openai.com/codex/cli',
+  },
+};
 
 export function Onboarding({ status, onChange }: Props) {
   const [, setLocation] = useLocation();
 
-  const [claudeCheck, setClaudeCheck] = useState<ClaudeCheck | null>(null);
+  const [engine, setEngine] = useState<EngineId>(status.engine);
+  const [agentCheck, setAgentCheck] = useState<AgentCheck | null>(null);
   const [checking, setChecking] = useState(false);
 
   const [token, setToken] = useState('');
@@ -21,17 +35,17 @@ export function Onboarding({ status, onChange }: Props) {
   const pollRef = useRef<number | null>(null);
 
   // Decide which step to land on.
-  const claudeOk = claudeCheck?.installed === true;
+  const agentOk = agentCheck?.installed === true;
   const step =
-    !claudeOk ? 1 : !status.bot_token_set || !bot ? 2 : !capturedId ? 3 : 4;
+    !agentOk ? 1 : !status.bot_token_set || !bot ? 2 : !capturedId ? 3 : 4;
 
-  const runClaudeCheck = async () => {
+  const runAgentCheck = async (id: EngineId) => {
     setChecking(true);
     try {
-      const r = await api.claudeCheck();
-      setClaudeCheck(r);
+      const r = await api.agentCheck(id);
+      setAgentCheck(r);
     } catch (e) {
-      setClaudeCheck({
+      setAgentCheck({
         installed: false,
         error: e instanceof Error ? e.message : String(e),
       });
@@ -40,8 +54,21 @@ export function Onboarding({ status, onChange }: Props) {
     }
   };
 
+  const selectEngine = async (id: EngineId) => {
+    if (id === engine && agentCheck) return;
+    setEngine(id);
+    setAgentCheck(null);
+    try {
+      await api.setEngine(id);
+      onChange();
+    } catch {
+      // check below will still surface install state
+    }
+    runAgentCheck(id);
+  };
+
   useEffect(() => {
-    runClaudeCheck();
+    runAgentCheck(status.engine);
   }, []);
 
   const saveToken = async () => {
@@ -119,57 +146,84 @@ export function Onboarding({ status, onChange }: Props) {
       <header className="mb-10">
         <h1 className="text-2xl font-semibold">Welcome to claude-code-telegram</h1>
         <p className="text-zinc-400 text-sm mt-1">
-          Relay messages from a Telegram bot to Claude Code running on this machine.
+          Relay messages from a Telegram bot to your coding agent (Claude Code or
+          Codex) running on this machine.
         </p>
       </header>
 
       <ol className="space-y-6">
         <StepCard
           n={1}
-          title="Check Claude Code is installed"
+          title="Choose your coding agent"
           active={step === 1}
-          done={claudeOk}
+          done={agentOk}
         >
+          <p className="text-zinc-400 text-sm mb-3">
+            Pick which agent the relay drives. You can switch later from the
+            dashboard or with the <code>/engine</code> command in Telegram.
+          </p>
+          <div className="grid grid-cols-2 gap-2 mb-4">
+            {status.engines.map((e) => (
+              <button
+                key={e.id}
+                onClick={() => selectEngine(e.id)}
+                className={[
+                  'px-3 py-2 rounded border text-sm font-medium transition-colors',
+                  engine === e.id
+                    ? 'border-blue-600 bg-blue-950/40 text-zinc-100'
+                    : 'border-zinc-800 bg-zinc-900/40 text-zinc-300 hover:bg-zinc-800',
+                ].join(' ')}
+              >
+                {e.label}
+              </button>
+            ))}
+          </div>
+
           {checking ? (
             <p className="text-zinc-400 text-sm">Checking…</p>
-          ) : claudeOk ? (
+          ) : agentOk ? (
             <div className="text-sm space-y-1">
-              <p className="text-emerald-400">Found Claude Code.</p>
-              {claudeCheck?.version && (
+              <p className="text-emerald-400">Found {INSTALL_DOCS[engine].label}.</p>
+              {agentCheck?.version && (
                 <p className="text-zinc-400">
-                  Version: <code className="text-zinc-200">{claudeCheck.version}</code>
+                  Version: <code className="text-zinc-200">{agentCheck.version}</code>
                 </p>
               )}
-              {claudeCheck?.path && (
+              {agentCheck?.path && (
                 <p className="text-zinc-400">
-                  Path: <code className="text-zinc-200">{claudeCheck.path}</code>
+                  Path: <code className="text-zinc-200">{agentCheck.path}</code>
                 </p>
               )}
             </div>
           ) : (
             <div className="text-sm space-y-3">
               <p className="text-red-400">
-                The <code>claude</code> CLI was not found on PATH.
+                The <code>{INSTALL_DOCS[engine].cli}</code> CLI was not found on PATH.
               </p>
-              {claudeCheck?.error && (
+              {agentCheck?.error && (
                 <pre className="bg-zinc-900 text-zinc-400 text-xs p-3 rounded overflow-auto whitespace-pre-wrap">
-                  {claudeCheck.error}
+                  {agentCheck.error}
                 </pre>
               )}
               <p className="text-zinc-400">
                 Install it from{' '}
                 <a
                   className="underline text-zinc-200"
-                  href="https://docs.claude.com/en/docs/claude-code/overview"
+                  href={INSTALL_DOCS[engine].href}
                   target="_blank"
                   rel="noreferrer"
                 >
-                  the Claude Code docs
+                  the {INSTALL_DOCS[engine].label} docs
                 </a>
+                {engine === 'codex' && (
+                  <>
+                    {' '}and sign in with <code>codex login</code>
+                  </>
+                )}
                 , then re-check.
               </p>
               <button
-                onClick={runClaudeCheck}
+                onClick={() => runAgentCheck(engine)}
                 className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded text-sm"
               >
                 Re-check

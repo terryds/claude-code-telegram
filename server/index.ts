@@ -2,7 +2,14 @@ import { resolve, extname } from 'node:path';
 import { existsSync, statSync, readFileSync } from 'node:fs';
 import { getSetting, setSetting, deleteSetting, recentMessages, recentFeed } from './db.ts';
 import { getBotInfo, getRecentChats, getTelegramConfig } from './telegram.ts';
-import { checkClaudeInstalled } from './claude-runner.ts';
+import {
+  ENGINE_IDS,
+  ENGINE_LABELS,
+  getEngineId,
+  setEngineId,
+  isEngineId,
+} from './engine.ts';
+import { getEngine } from './engines.ts';
 import {
   startListener,
   isRelayEnabled,
@@ -71,12 +78,32 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       chat_id: cfg.chatId,
       bot,
       relay_enabled: isRelayEnabled(),
+      engine: getEngineId(),
+      engines: ENGINE_IDS.map((id) => ({ id, label: ENGINE_LABELS[id] })),
     });
   }
 
-  if (p === '/claude-check' && m === 'GET') {
-    const result = await checkClaudeInstalled();
+  // Verify a given engine's CLI is installed. `?engine=claude|codex`
+  // (defaults to the active engine). `/claude-check` kept as a back-compat alias.
+  if ((p === '/agent-check' || p === '/claude-check') && m === 'GET') {
+    const q = url.searchParams.get('engine');
+    const id = q && isEngineId(q) ? q : p === '/claude-check' ? 'claude' : getEngineId();
+    const result = await getEngine(id).check();
     return json(result);
+  }
+
+  if (p === '/engine' && m === 'GET') {
+    return json({ engine: getEngineId() });
+  }
+
+  if (p === '/engine' && m === 'POST') {
+    const body = await readBody<{ engine?: string }>(req);
+    const id = (body.engine || '').trim();
+    if (!isEngineId(id)) return err(400, 'engine must be "claude" or "codex"');
+    setEngineId(id);
+    // Sessions don't carry across engines; clear so the next message is fresh.
+    deleteSetting('claude_session_id');
+    return json({ ok: true, engine: id });
   }
 
   if (p === '/onboarding/save-token' && m === 'POST') {

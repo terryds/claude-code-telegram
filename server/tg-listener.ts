@@ -12,8 +12,16 @@ import {
   type TelegramMessage,
   type TelegramUpdate,
 } from './telegram.ts';
-import { runClaudeHeadless, type AskQuestion } from './claude-runner.ts';
-import { watchSession, type ClaudeStep } from './claude-stream.ts';
+import {
+  ENGINE_LABELS,
+  getEngineId,
+  setEngineId,
+  isEngineId,
+  type AskQuestion,
+  type EngineResult,
+  type EngineStep,
+} from './engine.ts';
+import { currentEngine } from './engines.ts';
 
 const INCOMING_DIR = resolve('./data/incoming');
 mkdirSync(INCOMING_DIR, { recursive: true });
@@ -81,7 +89,7 @@ async function sleep(ms: number): Promise<void> {
 
 const MAX_TG = 4000;
 
-function formatStep(step: ClaudeStep): string {
+function formatStep(step: EngineStep): string {
   switch (step.kind) {
     case 'thinking':
       return `🧠 <i>thinking…</i>`;
@@ -111,7 +119,7 @@ function formatStep(step: ClaudeStep): string {
 let lastStepSentAt = 0;
 const MIN_STEP_INTERVAL_MS = 500;
 
-async function sendStep(step: ClaudeStep): Promise<void> {
+async function sendStep(step: EngineStep): Promise<void> {
   const msg = formatStep(step);
   if (!msg) return;
   // Throttle
@@ -129,83 +137,67 @@ async function sendStep(step: ClaudeStep): Promise<void> {
 // executes in the background (not awaited by the loop) and registers itself
 // here. A `/stop` command — or a new prompt (auto-stop & replace) — aborts it.
 
-type ActiveRun = { abort: AbortController; stop: () => void };
+type ActiveRun = { abort: AbortController };
 let activeRun: ActiveRun | null = null;
 
 /**
- * Abort the current run, if any, and stop its stream watcher synchronously so
- * it can't overlap with a replacement run on the same session file.
- * Returns true if a run was actually stopped.
+ * Abort the current run, if any. The engine owns its own stream cleanup and
+ * tears it down synchronously off the abort signal, so a replacement run can't
+ * overlap with it. Returns true if a run was actually stopped.
  */
 function stopActiveRun(): boolean {
   const run = activeRun;
   if (!run) return false;
   activeRun = null; // claim it so the run's own cleanup won't double-clear
   run.abort.abort();
-  run.stop();
   return true;
 }
 
 /**
- * Run Claude in the background with live step-by-step output to Telegram,
- * watching the JSONL session file while claude-runner executes. Does not block
- * the caller — the poll loop stays free to receive /stop and new messages.
+ * Run the active engine in the background with live step-by-step output to
+ * Telegram. Does not block the caller — the poll loop stays free to receive
+ * /stop and new messages.
  */
-function startClaudeRun(prompt: string, sessionId: string | null): void {
+function startEngineRun(prompt: string, sessionId: string | null): void {
   // Auto-stop & replace: cancel whatever is already running.
   stopActiveRun();
 
   const abort = new AbortController();
-  const run: ActiveRun = { abort, stop: () => {} };
+  const run: ActiveRun = { abort };
   activeRun = run;
 
   void (async () => {
-    const sid = sessionId ?? 'unknown';
+    const engine = currentEngine();
     // Persist every step for the dashboard feed, then forward it to Telegram.
     // Persisting first (and synchronously) keeps DB order correct even though
     // sendStep is throttled.
-    const onStep = async (step: ClaudeStep) => {
+    const onStep = async (step: EngineStep) => {
       logStep(step, sessionId);
       await sendStep(step);
     };
-    const stopWatch = await watchSession(sid, onStep);
-    let watcherStopped = false;
-    run.stop = () => {
-      if (watcherStopped) return;
-      watcherStopped = true;
-      stopWatch();
-    };
-    // If we were aborted while the watcher was starting up, stop immediately.
-    if (abort.signal.aborted) run.stop();
 
     await sendChatAction('typing');
     const typing = setInterval(() => {
       sendChatAction('typing').catch(() => {});
     }, 4000);
 
-    let result: Awaited<ReturnType<typeof runClaudeHeadless>>;
+    let result: EngineResult;
     try {
-      result = await runClaudeHeadless(prompt, sessionId, abort.signal);
+      result = await engine.run(prompt, sessionId, abort.signal, onStep);
     } finally {
       clearInterval(typing);
-      // Give the watcher a beat to flush final writes — but not when aborted,
-      // since a replacement run may already be watching the same file.
-      if (!abort.signal.aborted) await sleep(1000);
-      run.stop();
       if (activeRun === run) activeRun = null;
     }
 
     await deliverResult(result);
   })().catch((err) => {
-    console.error('[tg-listener] claude run crashed:', err);
+    console.error('[tg-listener] engine run crashed:', err);
     if (activeRun === run) activeRun = null;
   });
 }
 
-/** Send Claude's result (or error) back to Telegram and log it. */
-async function deliverResult(
-  result: Awaited<ReturnType<typeof runClaudeHeadless>>,
-): Promise<void> {
+/** Send the engine's result (or error) back to Telegram and log it. */
+async function deliverResult(result: EngineResult): Promise<void> {
   if (result.ok) {
     if (result.session_id) setSetting(CLAUDE_SESSION_KEY, result.session_id);
     // Claude asked a question. Headless mode auto-cancels it, so the result
@@ -225,7 +217,7 @@ async function deliverResult(
       if (!r.ok) console.error(`[tg-listener] question send failed: ${r.error}`);
       return;
     }
-    const body = result.text || '(Claude returned an empty response)';
+    const body = result.text || `(${ENGINE_LABELS[getEngineId()]} returned an empty response)`;
     const r = await sendTelegramPlain(body);
     logMessage({
       direction: 'out',
@@ -248,12 +240,12 @@ async function deliverResult(
   // Aborted runs were stopped on purpose; the /stop or replacement message
   // already acknowledged that, so don't surface a scary error.
   if (result.aborted) return;
-  await sendTelegram(`⚠️ <b>Claude error</b>\n${escapeHtml(result.error)}`);
+  await sendTelegram(`⚠️ <b>${escapeHtml(ENGINE_LABELS[getEngineId()])} error</b>\n${escapeHtml(result.error)}`);
 }
 
 /** Render AskUserQuestion(s) as a text prompt the user can answer by typing. */
 function formatQuestions(questions: AskQuestion[]): string {
-  const parts: string[] = ['❓ <b>Claude needs your input</b>'];
+  const parts: string[] = [`❓ <b>${ENGINE_LABELS[getEngineId()]} needs your input</b>`];
   questions.forEach((q, i) => {
     const num = questions.length > 1 ? `${i + 1}. ` : '';
     parts.push('');
@@ -347,9 +339,11 @@ async function processUpdate(upd: TelegramUpdate, expectedChatId: string | null)
 
   if (!text && !hasPhoto && !video) return;
 
+  const engineLabel = ENGINE_LABELS[getEngineId()];
+
   if (text === '/stop' || text.startsWith('/stop ')) {
     if (stopActiveRun()) {
-      await sendTelegram('🛑 <b>Stopped.</b> Claude was interrupted.');
+      await sendTelegram(`🛑 <b>Stopped.</b> ${escapeHtml(engineLabel)} was interrupted.`);
     } else {
       await sendTelegram('💤 Nothing is running right now.');
     }
@@ -359,7 +353,38 @@ async function processUpdate(upd: TelegramUpdate, expectedChatId: string | null)
   if (text === '/new_session' || text.startsWith('/new_session ')) {
     db.prepare('DELETE FROM settings WHERE key = ?').run(CLAUDE_SESSION_KEY);
     await sendTelegram(
-      '🔄 <b>New conversation started.</b>\nThe next message will begin a fresh Claude session.'
+      `🔄 <b>New conversation started.</b>\nThe next message will begin a fresh ${escapeHtml(engineLabel)} session.`
+    );
+    return;
+  }
+
+  if (text === '/engine' || text.startsWith('/engine ')) {
+    const arg = text.slice('/engine'.length).trim().toLowerCase();
+    if (!arg) {
+      await sendTelegram(
+        [
+          `🤖 <b>Current engine:</b> ${escapeHtml(engineLabel)}`,
+          '',
+          'Switch with:',
+          '  /engine claude — use Claude Code',
+          '  /engine codex — use Codex',
+          '',
+          '<i>Switching starts a fresh conversation.</i>',
+        ].join('\n')
+      );
+      return;
+    }
+    if (!isEngineId(arg)) {
+      await sendTelegram(`⚠️ Unknown engine <code>${escapeHtml(arg)}</code>. Use <code>claude</code> or <code>codex</code>.`);
+      return;
+    }
+    // Stop any in-flight run and clear the session — sessions don't carry
+    // across engines.
+    stopActiveRun();
+    db.prepare('DELETE FROM settings WHERE key = ?').run(CLAUDE_SESSION_KEY);
+    setEngineId(arg);
+    await sendTelegram(
+      `✅ <b>Engine switched to ${escapeHtml(ENGINE_LABELS[arg])}.</b>\nThe next message will begin a fresh conversation.`
     );
     return;
   }
@@ -367,16 +392,17 @@ async function processUpdate(upd: TelegramUpdate, expectedChatId: string | null)
   if (text === '/start' || text === '/help') {
     await sendTelegram(
       [
-        '<b>Claude Code Telegram Relay</b>',
+        '<b>Coding Agent Telegram Relay</b>',
         '',
-        "Send a message and I'll relay it to Claude Code running on your VPS.",
+        `Send a message and I'll relay it to <b>${escapeHtml(engineLabel)}</b> running on your VPS.`,
         '',
-        'You can also send photos (with or without a caption) — they get saved to disk and the file path is passed to Claude.',
-        'Videos and video notes work the same way — they get saved to disk and the file path is passed to Claude.',
+        'You can also send photos (with or without a caption) — they get saved to disk and the file path is passed to the agent.',
+        'Videos and video notes work the same way — they get saved to disk and the file path is passed to the agent.',
         '',
         'Commands:',
-        '  /stop — interrupt Claude while it\'s working',
-        '  /new_session — start a fresh Claude conversation',
+        '  /stop — interrupt the agent while it\'s working',
+        '  /new_session — start a fresh conversation',
+        '  /engine — show or switch the active engine (Claude Code / Codex)',
         '  /help — show this message',
       ].join('\n')
     );
@@ -403,12 +429,12 @@ async function processUpdate(upd: TelegramUpdate, expectedChatId: string | null)
   }
 
   console.log(
-    `[tg-listener] → claude (${sessionId ? 'resume ' + sessionId.slice(0, 8) : 'new session'}): ${prompt.slice(0, 80)}`
+    `[tg-listener] → ${getEngineId()} (${sessionId ? 'resume ' + sessionId.slice(0, 8) : 'new session'}): ${prompt.slice(0, 80)}`
   );
 
   // Fire-and-forget: the run streams its own output and the poll loop stays
   // free to receive /stop and further messages.
-  startClaudeRun(prompt, sessionId);
+  startEngineRun(prompt, sessionId);
 }
 
 async function buildPhotoPrompt(msg: TelegramMessage, userText: string): Promise<string> {
@@ -516,8 +542,9 @@ function escapeHtml(s: string): string {
 
 export async function applyBotCommands(): Promise<void> {
   await setMyCommands([
-    { command: 'stop', description: 'Interrupt Claude while it is working' },
-    { command: 'new_session', description: 'Start a new Claude conversation' },
+    { command: 'stop', description: 'Interrupt the agent while it is working' },
+    { command: 'new_session', description: 'Start a new conversation' },
+    { command: 'engine', description: 'Show or switch the active engine' },
     { command: 'help', description: 'Show usage' },
   ]);
 }

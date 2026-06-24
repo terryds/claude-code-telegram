@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useLocation } from 'wouter';
-import { api, type FeedEvent, type Status } from '../api';
+import { api, type EngineId, type FeedEvent, type Status } from '../api';
 
 type Props = { status: Status; onChange: () => void };
 
@@ -10,6 +10,9 @@ export function Dashboard({ status, onChange }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const feedRef = useRef<HTMLDivElement>(null);
+
+  const engineLabel =
+    status.engines.find((e) => e.id === status.engine)?.label ?? status.engine;
 
   const loadFeed = async () => {
     try {
@@ -40,6 +43,20 @@ export function Dashboard({ status, onChange }: Props) {
     setError(null);
     try {
       await api.setRelay(!status.relay_enabled);
+      onChange();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const switchEngine = async (id: EngineId) => {
+    if (id === status.engine) return;
+    setBusy('engine');
+    setError(null);
+    try {
+      await api.setEngine(id);
       onChange();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -102,6 +119,24 @@ export function Dashboard({ status, onChange }: Props) {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <div className="inline-flex rounded-full border border-zinc-700 overflow-hidden text-xs font-medium">
+            {status.engines.map((e) => (
+              <button
+                key={e.id}
+                onClick={() => switchEngine(e.id)}
+                disabled={busy === 'engine'}
+                className={[
+                  'px-3 py-1 transition-colors disabled:opacity-50',
+                  status.engine === e.id
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800',
+                ].join(' ')}
+                title="Switch coding agent — starts a fresh conversation"
+              >
+                {e.label}
+              </button>
+            ))}
+          </div>
           <span
             className={[
               'inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium',
@@ -143,8 +178,8 @@ export function Dashboard({ status, onChange }: Props) {
           </div>
           <div className="text-xs text-zinc-400 mt-1">
             {status.relay_enabled
-              ? 'Stop forwarding incoming messages to Claude.'
-              : 'Start forwarding incoming messages to Claude.'}
+              ? `Stop forwarding incoming messages to ${engineLabel}.`
+              : `Start forwarding incoming messages to ${engineLabel}.`}
           </div>
         </button>
 
@@ -153,7 +188,7 @@ export function Dashboard({ status, onChange }: Props) {
           disabled={busy === 'session'}
           className="p-4 rounded-lg border border-zinc-700 bg-zinc-900 hover:bg-zinc-800 text-left transition-colors disabled:opacity-50"
         >
-          <div className="font-medium text-sm">Reset Claude session</div>
+          <div className="font-medium text-sm">Reset {engineLabel} session</div>
           <div className="text-xs text-zinc-400 mt-1">
             Next message starts a fresh conversation.
           </div>
@@ -222,7 +257,7 @@ function FeedItem({ event }: { event: FeedEvent }) {
   const isIn = event.direction === 'in';
   return (
     <Row
-      label={isIn ? '→ Telegram' : '← Claude'}
+      label={isIn ? '→ Telegram' : '← Agent'}
       ts={ts}
       tone={isIn ? 'in' : event.ok ? 'out' : 'error'}
       session={event.session_id}
