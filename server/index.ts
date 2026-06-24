@@ -240,4 +240,4 @@ Bun.serve({
   },
 });
 
-console.log(`claude-code-telegram listening on http://localhost:${PORT}`);
+console.log(`coding-agent-telegram-relay listening on http://localhost:${PORT}`);
