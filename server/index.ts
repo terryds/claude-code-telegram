@@ -223,6 +223,11 @@ function serveStatic(url: URL): Response {
 
 startListener();
 
+// Refresh the Telegram command menu on boot so deploys pick up command changes.
+// (Otherwise setMyCommands only runs when the relay is toggled on, leaving the
+// menu stale across restarts.)
+if (isRelayEnabled()) applyBotCommands().catch(() => {});
+
 Bun.serve({
   port: PORT,
   async fetch(req) {
