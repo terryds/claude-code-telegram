@@ -6,19 +6,11 @@ import { watch, type FSWatcher } from 'node:fs';
 import { open, type FileHandle } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { homedir } from 'node:os';
+import type { EngineStep, OnStep } from './engine.ts';
 
-export type StepKind = 'thinking' | 'tool_use' | 'tool_result' | 'text';
-
-export type ClaudeStep = {
-  kind: StepKind;
-  ts: string;            // HH:MM:SS
-  toolName?: string;     // for tool_use
-  toolInput?: string;    // truncated input JSON
-  resultText?: string;   // for tool_result
-  text?: string;         // for text blocks
-};
-
-export type OnStep = (step: ClaudeStep) => void | Promise<void>;
+// Kept as aliases for back-compat with existing imports across the server.
+export type ClaudeStep = EngineStep;
+export type { StepKind, OnStep } from './engine.ts';
 
 const CLAUDE_PROJECTS = resolve(homedir(), '.claude/projects');
 

@@ -15,20 +15,27 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export type BotInfo = { id: number; username: string; first_name: string };
 
+export type EngineId = 'claude' | 'codex';
+export type EngineInfo = { id: EngineId; label: string };
+
 export type Status = {
   onboarded: boolean;
   bot_token_set: boolean;
   chat_id: string | null;
   bot: BotInfo | null;
   relay_enabled: boolean;
+  engine: EngineId;
+  engines: EngineInfo[];
 };
 
-export type ClaudeCheck = {
+export type AgentCheck = {
   installed: boolean;
   version?: string;
   path?: string;
   error?: string;
 };
+/** @deprecated use AgentCheck */
+export type ClaudeCheck = AgentCheck;
 
 export type MessageLogEntry = {
   id: number;
@@ -64,7 +71,13 @@ export type FeedEvent =
 
 export const api = {
   status: () => request<Status>('/status'),
-  claudeCheck: () => request<ClaudeCheck>('/claude-check'),
+  agentCheck: (engine: EngineId) =>
+    request<AgentCheck>(`/agent-check?engine=${engine}`),
+  setEngine: (engine: EngineId) =>
+    request<{ ok: true; engine: EngineId }>('/engine', {
+      method: 'POST',
+      body: JSON.stringify({ engine }),
+    }),
   saveToken: (token: string) =>
     request<{ ok: true; bot: BotInfo }>('/onboarding/save-token', {
       method: 'POST',

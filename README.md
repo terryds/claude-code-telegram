@@ -1,17 +1,22 @@
 # claude-code-telegram
 
-A tiny relay that forwards Telegram messages to [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) running on your VPS, and sends Claude's response back. Single-user, self-hosted, no external services beyond Telegram and your local `claude` CLI.
+A tiny relay that forwards Telegram messages to a coding agent — [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) **or** [Codex](https://developers.openai.com/codex/cli) — running on your VPS, and sends the agent's response back. Single-user, self-hosted, no external services beyond Telegram and your local CLI.
 
 - **Stack**: [Bun](https://bun.sh) + React (Vite) + Tailwind + Wouter + `bun:sqlite`
+- **Two engines** — drive Claude Code or Codex; pick one in onboarding, switch anytime from the dashboard or the `/engine` Telegram command
 - **No Telegram SDK** — just `fetch` against the Bot API
-- **No Anthropic SDK** — spawns your local `claude` CLI (inherits your auth)
-- **Session continuity** — Claude `--resume` keeps the conversation across messages
-- **Three-step onboarding** UI: detect Claude, paste bot token, capture your chat ID
+- **No vendor SDK** — spawns your local `claude` / `codex` CLI (inherits its auth)
+- **Session continuity** — `claude --resume` / `codex exec resume` keep the conversation across messages
+- **Guided onboarding** UI: choose engine + detect its CLI, paste bot token, capture your chat ID
+
+> Codex is driven via `codex exec --json` (one process per message, resumed by thread id) — the same one-shot-plus-resume model the relay already uses for Claude. It runs with `--dangerously-bypass-approvals-and-sandbox` to match Claude's `bypassPermissions`, so it works unattended. Keep the host's `codex` current — older CLIs may reject newer default models.
 
 ## Prerequisites
 
 - [Bun](https://bun.sh) `>= 1.3.12`
-- [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) installed and authenticated on the machine that runs the relay (`claude --version` must work)
+- The CLI for your chosen engine, installed and authenticated on the machine that runs the relay:
+  - **Claude Code** — [install](https://docs.claude.com/en/docs/claude-code/overview); `claude --version` must work
+  - **Codex** — [install](https://developers.openai.com/codex/cli), then `codex login` (or set an API key); `codex --version` must work
 - A Telegram bot — create one with [@BotFather](https://t.me/BotFather) and copy the token
 
 ## Local development
@@ -25,11 +30,11 @@ This launches the server (port `3000`, hot-reload) and Vite (port `5173`, proxyi
 
 You'll be sent to `/onboarding`:
 
-1. The page calls `/api/claude-check` and verifies `claude` is on PATH.
+1. Choose your engine (Claude Code or Codex). The page calls `/api/agent-check?engine=…` and verifies the matching CLI is on PATH.
 2. Paste your bot token. The server validates it via `getMe` and shows `@your_bot`.
 3. Click **Start listening**, then open Telegram and message your bot. The first incoming message captures your chat ID and links it. The bot replies "✅ Chat linked".
 
-After that you're on the dashboard, where you can toggle the relay, reset the Claude session, view recent messages, or reset everything.
+After that you're on the dashboard, where you can switch engine, toggle the relay, reset the agent session, view recent messages, or reset everything.
 
 ## Production build
 
