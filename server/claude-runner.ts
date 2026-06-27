@@ -7,7 +7,6 @@ import type {
 } from './engine.ts';
 import { ENGINE_LABELS } from './engine.ts';
 import { watchSession } from './claude-stream.ts';
-import { agentSpawnEnv } from './agent-env.ts';
 
 // Kept as aliases for back-compat with existing imports across the server.
 export type {
@@ -48,7 +47,6 @@ export async function runClaudeHeadless(
     proc = Bun.spawn(['claude', ...args], {
       stdout: 'pipe',
       stderr: 'pipe',
-      env: agentSpawnEnv(),
     });
   } catch (err) {
     return {

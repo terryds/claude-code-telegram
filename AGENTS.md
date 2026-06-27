@@ -10,32 +10,6 @@ engine is a global setting (switchable via the dashboard or the `/engine`
 Telegram command); engine implementations live behind `server/engine.ts` /
 `server/engines.ts`.
 
-## Transcribing incoming audio/video
-
-Voice notes, audio files, and videos arrive as a local file path in your prompt
-(the relay downloads them, no preprocessing). To transcribe one, run:
-
-```bash
-scripts/transcribe.sh <path-to-file>
-```
-
-It downmixes with `ffmpeg` and calls the OpenAI transcription API (`whisper-1`),
-so **no local whisper install is needed — don't install one.** It works for
-videos too (the audio track is extracted automatically).
-
-It needs an OpenAI API key. If the script reports `OPENAI_API_KEY` is missing,
-**ask the user in your reply to send their OpenAI API key** (an `sk-...`
-string). When they reply with it, save it and retry:
-
-```bash
-scripts/save-openai-key.sh <sk-...>
-scripts/transcribe.sh <path-to-file>
-```
-
-The key is stored in `data/agent.env` (gitignored, chmod 600) and the relay
-loads it into every future agent run, so you only need to ask once. Heads-up the
-user that the key will be visible in their Telegram chat history.
-
 ## Setup
 
 Install the system dependencies (bun, Node, pm2, git, jq, sqlite3):
