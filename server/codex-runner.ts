@@ -21,6 +21,7 @@ import {
   type EngineStep,
   type OnStep,
 } from './engine.ts';
+import { agentSpawnEnv } from './agent-env.ts';
 
 const CODEX_TIMEOUT_MS = Number(Bun.env.CODEX_TIMEOUT_MS || '0');
 
@@ -164,7 +165,7 @@ export async function runCodexHeadless(
   try {
     // stdin = /dev/null: the prompt is passed as an arg, and we must not let
     // codex block waiting to read a piped prompt from stdin.
-    proc = Bun.spawn(['codex', ...args], { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' });
+    proc = Bun.spawn(['codex', ...args], { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe', env: agentSpawnEnv() });
   } catch (err) {
     return {
       ok: false,

@@ -548,7 +548,7 @@ async function buildVideoPrompt(
     return '';
   }
 
-  const ref = `A video was attached at: ${destPath}\nIt's a video file — use your tools to inspect it (e.g. extract frames or audio with ffmpeg) as needed.`;
+  const ref = `A video was attached at: ${destPath}\nIt's a video file — use your tools to inspect it (extract frames or audio with ffmpeg). To transcribe its audio, run \`scripts/transcribe.sh ${destPath}\` (see AGENTS.md).`;
   return userText
     ? `${ref}\n\n${userText}`
     : `${ref}\n\nNo caption was provided — figure out what the user wants, or wait for follow-up instructions.`;
@@ -622,7 +622,7 @@ async function buildAudioPrompt(
     return '';
   }
 
-  const ref = `An audio message was attached at: ${destPath}\nIt's an audio file — use your tools to inspect it (e.g. transcribe it) as needed.`;
+  const ref = `An audio message was attached at: ${destPath}\nIt's an audio file — to transcribe it, run \`scripts/transcribe.sh ${destPath}\` (see AGENTS.md). Use other tools to inspect it as needed.`;
   return userText
     ? `${ref}\n\n${userText}`
     : `${ref}\n\nNo caption was provided — figure out what the user wants, or wait for follow-up instructions.`;
