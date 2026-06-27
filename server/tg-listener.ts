@@ -351,8 +351,9 @@ async function processUpdate(upd: TelegramUpdate, expectedChatId: string | null)
   const caption = (msg.caption ?? '').trim();
   const hasPhoto = Array.isArray(msg.photo) && msg.photo.length > 0;
   const video = extractVideo(msg);
+  const audio = extractAudio(msg);
 
-  if (!text && !hasPhoto && !video) return;
+  if (!text && !hasPhoto && !video && !audio) return;
 
   const engineLabel = ENGINE_LABELS[getEngineId()];
 
@@ -412,7 +413,7 @@ async function processUpdate(upd: TelegramUpdate, expectedChatId: string | null)
         `Send a message and I'll relay it to <b>${escapeHtml(engineLabel)}</b> running on your VPS.`,
         '',
         'You can also send photos (with or without a caption) — they get saved to disk and the file path is passed to the agent.',
-        'Videos and video notes work the same way — they get saved to disk and the file path is passed to the agent.',
+        'Videos, video notes, voice notes and audio files work the same way — they get saved to disk and the file path is passed to the agent.',
         '',
         'Commands:',
         '  /stop — interrupt the agent while it\'s working',
@@ -427,6 +428,8 @@ async function processUpdate(upd: TelegramUpdate, expectedChatId: string | null)
   let prompt: string;
   if (video) {
     prompt = await buildVideoPrompt(msg, video, caption || text);
+  } else if (audio) {
+    prompt = await buildAudioPrompt(msg, audio, caption || text);
   } else if (hasPhoto) {
     prompt = await buildPhotoPrompt(msg, caption || text);
   } else {
@@ -546,6 +549,80 @@ async function buildVideoPrompt(
   }
 
   const ref = `A video was attached at: ${destPath}\nIt's a video file — use your tools to inspect it (e.g. extract frames or audio with ffmpeg) as needed.`;
+  return userText
+    ? `${ref}\n\n${userText}`
+    : `${ref}\n\nNo caption was provided — figure out what the user wants, or wait for follow-up instructions.`;
+}
+
+// ── Audio ───────────────────────────────────────────────────────────
+//
+// Like videos, voice notes and audio files are downloaded to disk and the local
+// path is handed to Claude — no pre-processing. The agent decides what to do
+// with it (transcribe it, etc.) using its own tools.
+// Covers voice, audio, and audio/* documents.
+
+type AudioAttachment = {
+  file_id: string;
+  file_unique_id: string;
+  hint_ext: string;
+  size: number;
+};
+
+function extractAudio(msg: TelegramMessage): AudioAttachment | null {
+  if (msg.voice) {
+    return {
+      file_id: msg.voice.file_id,
+      file_unique_id: msg.voice.file_unique_id,
+      hint_ext: '.ogg',
+      size: msg.voice.file_size ?? 0,
+    };
+  }
+  if (msg.audio) {
+    const ext = msg.audio.file_name ? extname(msg.audio.file_name) : '';
+    return {
+      file_id: msg.audio.file_id,
+      file_unique_id: msg.audio.file_unique_id,
+      hint_ext: ext || '.mp3',
+      size: msg.audio.file_size ?? 0,
+    };
+  }
+  if (msg.document && msg.document.mime_type && msg.document.mime_type.startsWith('audio/')) {
+    const ext = msg.document.file_name ? extname(msg.document.file_name) : '';
+    return {
+      file_id: msg.document.file_id,
+      file_unique_id: msg.document.file_unique_id,
+      hint_ext: ext || '.mp3',
+      size: msg.document.file_size ?? 0,
+    };
+  }
+  return null;
+}
+
+/**
+ * Download an audio message and return a Claude prompt that points at the local
+ * file — mirrors buildVideoPrompt. Returns '' if we already replied with an
+ * error (too big, or download failed).
+ */
+async function buildAudioPrompt(
+  msg: TelegramMessage,
+  audio: AudioAttachment,
+  userText: string
+): Promise<string> {
+  if (audio.size > TG_FILE_LIMIT) {
+    await sendTelegram(
+      "🎙 <b>Audio received, but it's too big.</b>\nTelegram bots can only download files up to 20 MB."
+    );
+    return '';
+  }
+
+  const destPath = join(INCOMING_DIR, `${audio.file_unique_id}${audio.hint_ext}`);
+  const dl = await downloadTelegramFile(audio.file_id, destPath);
+  if (!dl.ok) {
+    await sendTelegram(`⚠️ <b>Failed to download audio</b>\n${escapeHtml(dl.error)}`);
+    return '';
+  }
+
+  const ref = `An audio message was attached at: ${destPath}\nIt's an audio file — use your tools to inspect it (e.g. transcribe it) as needed.`;
   return userText
     ? `${ref}\n\n${userText}`
     : `${ref}\n\nNo caption was provided — figure out what the user wants, or wait for follow-up instructions.`;

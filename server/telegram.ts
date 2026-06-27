@@ -65,6 +65,26 @@ export type TelegramDocument = {
   file_size?: number;
 };
 
+// Voice notes (OGG/opus) and audio files (mp3, m4a, …) share the fields we use.
+export type TelegramVoice = {
+  file_id: string;
+  file_unique_id: string;
+  duration: number;
+  mime_type?: string;
+  file_size?: number;
+};
+
+export type TelegramAudio = {
+  file_id: string;
+  file_unique_id: string;
+  duration: number;
+  performer?: string;
+  title?: string;
+  file_name?: string;
+  mime_type?: string;
+  file_size?: number;
+};
+
 export type TelegramMessage = {
   message_id: number;
   date: number;
@@ -74,6 +94,8 @@ export type TelegramMessage = {
   video?: TelegramVideo;
   video_note?: TelegramVideoNote;
   animation?: TelegramVideo;
+  voice?: TelegramVoice;
+  audio?: TelegramAudio;
   document?: TelegramDocument;
   chat: TelegramChat;
 };
