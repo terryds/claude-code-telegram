@@ -15,13 +15,13 @@ It's a single-user, self-hosted relay that forwards Telegram messages to a codin
 1. Clone https://github.com/terryds/coding-agent-telegram-relay.git into ~/coding-agent-telegram-relay and cd into it.
 2. Run `bin/doctor`. If any core dependency is missing (bun, node, npm, pm2, git, jq, sqlite3, python3), run `bin/install` (idempotent, uses sudo) and re-check. Do NOT touch the agent CLIs. (python3 is needed for Claude's in-dashboard subscription sign-in.)
 3. Build: `bun install` then `bun run build`.
-4. Start it under pm2 on port 3000 with bun as the interpreter:
+4. Start it under pm2 on port 8000 (exe.dev's default exposed port) with bun as the interpreter:
      cd ~/coding-agent-telegram-relay
-     PORT=3000 pm2 start server/index.ts --name coding-agent-telegram-relay --interpreter "$(which bun)" --max-restarts 10 --restart-delay 3000
+     PORT=8000 pm2 start server/index.ts --name coding-agent-telegram-relay --interpreter "$(which bun)" --max-restarts 10 --restart-delay 3000
      pm2 save
      pm2 startup   # run the command it prints so it survives reboot
-5. Confirm it's listening on 3000 with no errors (`pm2 logs coding-agent-telegram-relay --lines 20`).
-6. Tell me the public URL for port 3000 on this VM — that's the dashboard. I'll finish setup there myself: choose Claude Code or Codex, sign in (subscription, right in the page — or paste an API key), paste my Telegram bot token (from @BotFather), and message the bot once to link my chat.
+5. Confirm it's listening on 8000 with no errors (`pm2 logs coding-agent-telegram-relay --lines 20`).
+6. Tell me the public URL for port 8000 on this VM — that's the dashboard. I'll finish setup there myself: choose Claude Code or Codex, sign in (subscription, right in the page — or paste an API key), paste my Telegram bot token (from @BotFather), and message the bot once to link my chat.
 
 Do NOT set the Telegram bot token or chat ID, and do NOT authenticate the agent CLIs — those all happen in the dashboard onboarding UI.
 ```
@@ -38,7 +38,7 @@ ssh exe.dev new --name=coding-relay --cpu=2 --memory=4GB --disk=20GB --prompt=/d
 
 ## After it reports the URL
 
-Open the dashboard URL the agent gives you (e.g. `https://<vm-name>.exe.xyz:3000`)
+Open the dashboard URL the agent gives you (e.g. `https://<vm-name>.exe.xyz:8000`)
 and complete onboarding — all in the browser, no terminal:
 
 1. **Choose & authenticate your agent.** Pick Claude Code or Codex. The page
@@ -54,7 +54,7 @@ Then you're on the dashboard and the relay is live.
 ## Notes
 
 - **The dashboard has no built-in auth.** Put exe.dev's access controls in front
-  of port 3000 (don't expose it openly — anyone who reaches it can re-onboard and
+  of port 8000 (don't expose it openly — anyone who reaches it can re-onboard and
   get a shell on the VM).
 - Recommended specs: 2 CPU / 4 GB / 20 GB disk; Ubuntu image (auto-detected).
 - Auth (subscription tokens / API keys), bot token, chat link, and session all

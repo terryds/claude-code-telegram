@@ -31,7 +31,9 @@ import {
   skipBacklog,
 } from './tg-listener.ts';
 
-const PORT = Number(process.env.PORT || 3000);
+// Default to 8000 (exe.dev's default port); fall back to 3000 if it's taken.
+// An explicit PORT env var always wins and is used as-is (no fallback).
+const PORT_CANDIDATES = process.env.PORT ? [Number(process.env.PORT)] : [8000, 3000];
 const CLIENT_DIR = resolve('./dist/client');
 
 const MIME: Record<string, string> = {
@@ -319,21 +321,34 @@ startListener();
 // menu stale across restarts.)
 if (isRelayEnabled()) applyBotCommands().catch(() => {});
 
-Bun.serve({
-  port: PORT,
-  async fetch(req) {
-    const url = new URL(req.url);
-    if (url.pathname.startsWith('/api')) {
-      try {
-        return await handleApi(req, url);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        console.error('[api] error:', msg);
-        return err(500, msg);
-      }
+const fetchHandler = async (req: Request) => {
+  const url = new URL(req.url);
+  if (url.pathname.startsWith('/api')) {
+    try {
+      return await handleApi(req, url);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error('[api] error:', msg);
+      return err(500, msg);
     }
-    return serveStatic(url);
-  },
-});
+  }
+  return serveStatic(url);
+};
 
-console.log(`coding-agent-telegram-relay listening on http://localhost:${PORT}`);
+function serve() {
+  for (const port of PORT_CANDIDATES) {
+    try {
+      return Bun.serve({ port, fetch: fetchHandler });
+    } catch (e) {
+      const isInUse = e instanceof Error && /EADDRINUSE|in use|address already/i.test(e.message);
+      const isLast = port === PORT_CANDIDATES[PORT_CANDIDATES.length - 1];
+      if (!isInUse || isLast) throw e;
+      console.warn(`port ${port} is in use, trying ${PORT_CANDIDATES[PORT_CANDIDATES.indexOf(port) + 1]}…`);
+    }
+  }
+  throw new Error('no port available');
+}
+
+const server = serve();
+
+console.log(`coding-agent-telegram-relay listening on http://localhost:${server.port}`);

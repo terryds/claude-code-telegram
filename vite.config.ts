@@ -16,7 +16,9 @@ export default defineConfig({
     // Dev-only — prod (`bun start`) is a plain Bun server, not Vite.
     allowedHosts: true,
     proxy: {
-      '/api': 'http://localhost:3000',
+      // Mirror the server's default port (8000, exe.dev's default; falls back to
+      // 3000 if taken). Override with PORT if you run the server elsewhere.
+      '/api': `http://localhost:${process.env.PORT || 8000}`,
     },
   },
 });
