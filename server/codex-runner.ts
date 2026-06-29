@@ -280,32 +280,58 @@ export async function runCodexHeadless(
   return { ok: true, text: acc.finalText.trim(), session_id: acc.sessionId };
 }
 
-// A real but minimal turn used to verify auth works end-to-end. Bounded by a
-// timeout so a hung/blocked CLI can't stall onboarding forever.
-const AUTH_PROBE_PROMPT = 'Reply with exactly the word: ok';
-const AUTH_PROBE_TIMEOUT_MS = 45_000;
+/**
+ * Read Codex's saved login state via `codex login status` (cheap, no billed
+ * request). Exit 0 + "Logged in …" means signed in; exit 1 / "Not logged in"
+ * means not. Note: it reflects the saved subscription/login only — it ignores
+ * an OPENAI_API_KEY in the env.
+ */
+export async function codexLoginStatus(): Promise<{ loggedIn: boolean; detail?: string } | null> {
+  try {
+    const proc = Bun.spawn(['codex', 'login', 'status'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: { ...process.env, ...authEnv('codex') },
+    });
+    const [out, errOut, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    const text = `${out}\n${errOut}`;
+    const loggedIn =
+      code === 0 && /logged in/i.test(text) && !/not logged in/i.test(text);
+    const detail = (out.trim() || errOut.trim()).split('\n')[0] || undefined;
+    return { loggedIn, detail };
+  } catch {
+    return null;
+  }
+}
 
 export async function checkCodexAuth(): Promise<EngineAuth> {
   const method = getAuthMethod('codex');
   const hasKey = Boolean(getApiKey('codex'));
-  if (method === 'apikey' && !hasKey) {
-    return { authed: false, method, hasKey, error: 'No API key saved yet.' };
+
+  // `codex login status` only sees the saved login, not an injected API key, so
+  // for the API-key path we report "configured" when a key is saved (same
+  // configured-not-validated stance as the Claude API-key check).
+  if (method === 'apikey') {
+    return hasKey
+      ? { authed: true, method, hasKey }
+      : { authed: false, method, hasKey, error: 'No API key saved yet.' };
   }
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), AUTH_PROBE_TIMEOUT_MS);
-  let res: EngineResult;
-  try {
-    res = await runCodexHeadless(AUTH_PROBE_PROMPT, null, ctrl.signal, () => {});
-  } finally {
-    clearTimeout(timer);
+  const status = await codexLoginStatus();
+  if (!status) {
+    return { authed: false, method, hasKey, error: "Couldn't run `codex login status`." };
   }
-
-  if (res.ok) return { authed: true, method, hasKey };
-  const error = ctrl.signal.aborted
-    ? `Auth probe timed out after ${AUTH_PROBE_TIMEOUT_MS / 1000}s.`
-    : res.error;
-  return { authed: false, method, hasKey, error };
+  if (status.loggedIn) return { authed: true, method, hasKey };
+  return {
+    authed: false,
+    method,
+    hasKey,
+    error: status.detail || 'Not signed in. Run `codex login` on the host.',
+  };
 }
 
 export async function checkCodexInstalled(): Promise<EngineCheck> {
