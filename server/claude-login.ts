@@ -161,6 +161,7 @@ export async function startClaudeLogin(): Promise<{ url: string }> {
     error: null,
   };
   session = s;
+  console.error(`[claude-login] started pid=${proc.pid} cmd=${ptyCommand().join(' ')}`);
 
   // Continuously drain stdout (so the PTY doesn't block) and watch for both the
   // authorize URL and the minted token. The token appears either after the user
@@ -202,9 +203,17 @@ export async function startClaudeLogin(): Promise<{ url: string }> {
       // process ended / killed
     }
     // The process has exited. If we never got a token, it's a failure.
+    const exitCode = await proc.exited.catch(() => -1);
     if (s.state === 'awaiting') {
       s.state = 'error';
-      s.error = tidyTail(s.buf, 600) || 'Sign-in ended before completing.';
+      const tail = tidyTail(s.buf, 600);
+      s.error =
+        tail || `Sign-in ended before completing (CLI exited code ${exitCode}, no output).`;
+      console.error(
+        `[claude-login] setup-token exited code=${exitCode} bufLen=${s.buf.length} tail=${JSON.stringify(
+          stripAnsi(s.buf).slice(-400)
+        )}`
+      );
     }
   })();
   // Drain stderr too.
