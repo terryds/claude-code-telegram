@@ -175,12 +175,26 @@ export async function startClaudeLogin(): Promise<{ url: string }> {
         if (done) break;
         s.buf += dec.decode(value, { stream: true });
         if (!s.url) s.url = extractUrl(s.buf);
-        if (!s.token) {
-          const m = stripAnsi(s.buf).match(TOKEN_RE);
+        if (!s.token && s.state === 'awaiting') {
+          const clean = stripAnsi(s.buf);
+          const m = clean.match(TOKEN_RE);
           if (m) {
             s.token = m[0];
             setOauthToken('claude', s.token);
             s.state = 'done';
+          } else if (/OAuth error:|Invalid code|expired|Press Enter to retry/i.test(clean)) {
+            // The CLI rejected the code (wrong/truncated/expired). Surface it
+            // and stop, rather than leaving the user staring at a spinner.
+            const line = clean.match(/OAuth error:[^\n\r]*/i)?.[0];
+            s.error = (line || 'Sign-in failed — the code may be wrong or expired.')
+              .replace(/\s+/g, ' ')
+              .trim();
+            s.state = 'error';
+            try {
+              s.proc.kill();
+            } catch {
+              // ignore
+            }
           }
         }
       }
@@ -243,7 +257,13 @@ export async function submitClaudeLoginCode(
   if (!code) return { ok: false, error: 'Paste the code from the sign-in page.' };
 
   try {
-    s.proc.stdin.write(code + '\n');
+    // The CLI's paste prompt is a raw-mode Ink input. Send the code, then send
+    // Enter (\r — NOT \n) as a SEPARATE write: if the \r rides in the same chunk
+    // as the code, Ink treats it as pasted text and never submits.
+    s.proc.stdin.write(code);
+    await s.proc.stdin.flush();
+    await sleep(250);
+    s.proc.stdin.write('\r');
     await s.proc.stdin.flush();
   } catch (err) {
     return {
