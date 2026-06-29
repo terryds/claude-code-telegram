@@ -14,9 +14,13 @@ A tiny relay that forwards Telegram messages to a coding agent — [Claude Code]
 ## Prerequisites
 
 - [Bun](https://bun.sh) `>= 1.3.12`
-- The CLI for your chosen engine, installed and authenticated on the machine that runs the relay:
+- The CLI for your chosen engine, installed on the machine that runs the relay.
+  You can **authenticate it from the dashboard** during onboarding (see
+  [Authentication](#authentication)), so it only needs to be on PATH:
   - **Claude Code** — [install](https://docs.claude.com/en/docs/claude-code/overview); `claude --version` must work
-  - **Codex** — [install](https://developers.openai.com/codex/cli), then `codex login` (or set an API key); `codex --version` must work
+  - **Codex** — [install](https://developers.openai.com/codex/cli); `codex --version` must work
+- `python3` — only for Claude's in-dashboard subscription sign-in (it drives a
+  PTY). `bin/install` installs it; skip if you authenticate Claude another way.
 - A Telegram bot — create one with [@BotFather](https://t.me/BotFather) and copy the token
 
 ## Local development
@@ -30,11 +34,33 @@ This launches the server (port `3000`, hot-reload) and Vite (port `5173`, proxyi
 
 You'll be sent to `/onboarding`:
 
-1. Choose your engine (Claude Code or Codex). The page calls `/api/agent-check?engine=…` and verifies the matching CLI is on PATH.
+1. **Choose your engine and authenticate it.** The page verifies the CLI is installed, then checks whether it's signed in. If not, pick **Subscription** (sign in straight from the dashboard — no terminal) or **API key** (paste a key; it's stored and injected when the relay runs). See [Authentication](#authentication).
 2. Paste your bot token. The server validates it via `getMe` and shows `@your_bot`.
 3. Click **Start listening**, then open Telegram and message your bot. The first incoming message captures your chat ID and links it. The bot replies "✅ Chat linked".
 
-After that you're on the dashboard, where you can switch engine, toggle the relay, reset the agent session, view recent messages, or reset everything.
+After that you're on the dashboard, where you can switch engine, manage agent authentication, toggle the relay, reset the agent session, view recent messages, or reset everything.
+
+## Authentication
+
+The relay spawns your local `claude` / `codex` CLI, so that CLI has to be
+authenticated. Onboarding (and the dashboard's agent-auth panel) detect this and
+offer two methods per engine, switchable anytime:
+
+- **Subscription** — sign in with your Claude or ChatGPT/Codex plan, from the
+  dashboard, no terminal:
+  - **Claude Code** drives `claude setup-token` to mint a long-lived OAuth token
+    (this is why `python3` is needed — it runs the CLI in a PTY). Click **Sign in
+    with Claude** and authorize in your browser. On a desktop it completes on its
+    own; on a headless host you paste the code the page shows you.
+  - **Codex** drives `codex login --device-auth`. Click **Sign in with Codex**,
+    open the page, and enter the one-time code.
+- **API key** — paste an Anthropic / OpenAI key. It's stored in `data/app.db` and
+  injected as `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` when the relay runs (this is
+  pay-per-token API billing, not your subscription).
+
+Detection is cheap — `claude auth status` / `codex login status`, no model call.
+You can also authenticate the CLI yourself on the host (`claude` then `/login`,
+or `codex login`) and the relay will pick it up.
 
 ## Production build
 
@@ -51,14 +77,14 @@ These steps assume Ubuntu/Debian. Adjust paths as needed.
 
 ### 1. Install dependencies
 
-The repo ships an installer for the system dependencies (bun, Node, pm2, git, jq, sqlite3). After cloning, just run:
+The repo ships an installer for the system dependencies (bun, Node, pm2, git, jq, sqlite3, python3). After cloning, just run:
 
 ```bash
 bin/install        # installs anything missing (Ubuntu/Debian, uses sudo)
 bin/doctor         # read-only: report what's present / missing
 ```
 
-`bin/install` is idempotent (safe to re-run) and **does not** touch the agent CLIs — install + log into Claude Code or Codex yourself (it prints the links). This is also the "point your coding agent at the repo" path: an agent can run `bin/doctor`, then `bin/install`, then follow the agent-CLI hints.
+`bin/install` is idempotent (safe to re-run) and **does not** touch the agent CLIs — install Claude Code or Codex yourself (it prints the links). You don't have to log them in here: authentication can be done from the dashboard during onboarding (see [Authentication](#authentication)). This is also the "point your coding agent at the repo" path: an agent can run `bin/doctor`, then `bin/install`, then follow the agent-CLI hints.
 
 <details>
 <summary>Or install everything by hand</summary>
@@ -75,8 +101,8 @@ sudo apt install -y nodejs
 # pm2 globally
 sudo npm install -g pm2
 
-# deploy-script helpers
-sudo apt install -y git jq sqlite3
+# deploy-script helpers (+ python3 for Claude's in-dashboard sign-in)
+sudo apt install -y git jq sqlite3 python3
 
 # An agent CLI (pick one or both):
 npm install -g @anthropic-ai/claude-code   # Claude Code
@@ -85,7 +111,7 @@ npm install -g @anthropic-ai/claude-code   # Claude Code
 
 </details>
 
-Then log into your agent so credentials are stored for your user — `claude` (follow the auth flow, then `/exit`) and/or `codex login`.
+You can authenticate your agent from the dashboard during onboarding (subscription sign-in or API key — see [Authentication](#authentication)), so this is optional. To do it on the host instead, run `claude` (follow the auth flow, then `/exit`) and/or `codex login`.
 
 ### 2. Clone and build
 
