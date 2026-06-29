@@ -20,6 +20,7 @@ import {
   cancelClaudeLogin,
   claudeLoginStatus,
 } from './claude-login.ts';
+import { startCodexLogin, cancelCodexLogin, codexLoginState } from './codex-login.ts';
 import {
   startListener,
   isRelayEnabled,
@@ -155,6 +156,26 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   // Poll the in-progress sign-in: { state: 'idle'|'awaiting'|'done'|'error' }.
   if (p === '/auth/claude-login/status' && m === 'GET') {
     return json(claudeLoginStatus());
+  }
+
+  // Codex subscription sign-in (device-authorization flow). Start → returns the
+  // verification URL + one-time code; the user enters it in their browser and
+  // the CLI polls to completion (no paste needed).
+  if (p === '/auth/codex-login/start' && m === 'POST') {
+    try {
+      return json(await startCodexLogin());
+    } catch (e) {
+      return err(400, e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  if (p === '/auth/codex-login/status' && m === 'GET') {
+    return json(codexLoginState());
+  }
+
+  if (p === '/auth/codex-login/cancel' && m === 'POST') {
+    cancelCodexLogin();
+    return json({ ok: true });
   }
 
   if (p === '/auth/claude-login/cancel' && m === 'POST') {

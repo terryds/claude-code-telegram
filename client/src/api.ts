@@ -108,6 +108,14 @@ export const api = {
     ),
   claudeLoginCancel: () =>
     request<{ ok: true }>('/auth/claude-login/cancel', { method: 'POST' }),
+  codexLoginStart: () =>
+    request<{ url: string; code: string }>('/auth/codex-login/start', { method: 'POST' }),
+  codexLoginState: () =>
+    request<{ state: 'idle' | 'awaiting' | 'done' | 'error'; error?: string }>(
+      '/auth/codex-login/status'
+    ),
+  codexLoginCancel: () =>
+    request<{ ok: true }>('/auth/codex-login/cancel', { method: 'POST' }),
   setEngine: (engine: EngineId) =>
     request<{ ok: true; engine: EngineId }>('/engine', {
       method: 'POST',

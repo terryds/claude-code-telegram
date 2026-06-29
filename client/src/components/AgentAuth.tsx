@@ -49,6 +49,12 @@ export function AgentAuth({ engine, autoProbe = true, onAuthed }: Props) {
   const [loginBusy, setLoginBusy] = useState<'start' | 'submit' | null>(null);
   const [loginErr, setLoginErr] = useState<string | null>(null);
 
+  // Interactive Codex subscription sign-in (device-auth flow).
+  const [codexUrl, setCodexUrl] = useState<string | null>(null);
+  const [codexCode, setCodexCode] = useState<string | null>(null);
+  const [codexBusy, setCodexBusy] = useState(false);
+  const [codexErr, setCodexErr] = useState<string | null>(null);
+
   const probe = async () => {
     setChecking(true);
     setErr(null);
@@ -83,6 +89,7 @@ export function AgentAuth({ engine, autoProbe = true, onAuthed }: Props) {
     setProbed(false);
     setKey('');
     resetLogin();
+    resetCodexLogin();
     onAuthed?.(false);
     if (autoProbe) probe();
     else loadConfig();
@@ -121,6 +128,61 @@ export function AgentAuth({ engine, autoProbe = true, onAuthed }: Props) {
       setLoginBusy(null);
     }
   };
+
+  const resetCodexLogin = () => {
+    setCodexUrl(null);
+    setCodexCode(null);
+    setCodexErr(null);
+    api.codexLoginCancel().catch(() => {});
+  };
+
+  const startCodexLogin = async () => {
+    setCodexBusy(true);
+    setCodexErr(null);
+    try {
+      const r = await api.codexLoginStart();
+      setCodexCode(r.code);
+      setCodexUrl(r.url); // starts the status poll (effect below)
+    } catch (e) {
+      setCodexErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCodexBusy(false);
+    }
+  };
+
+  // Poll the Codex device-auth sign-in until the CLI finishes (the user enters
+  // the code in their browser) — surfaces as state 'done'.
+  useEffect(() => {
+    if (!codexUrl) return;
+    let stopped = false;
+    let timer: number | null = null;
+    const tick = async () => {
+      try {
+        const s = await api.codexLoginState();
+        if (stopped) return;
+        if (s.state === 'done') {
+          setCodexUrl(null);
+          setCodexCode(null);
+          await probe();
+          return;
+        }
+        if (s.state === 'error') {
+          setCodexErr(s.error || 'Sign-in failed — try again.');
+          setCodexUrl(null);
+          return;
+        }
+      } catch {
+        // keep polling
+      }
+      if (!stopped) timer = window.setTimeout(tick, 2000);
+    };
+    timer = window.setTimeout(tick, 2000);
+    return () => {
+      stopped = true;
+      if (timer) window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [codexUrl]);
 
   // While a sign-in is in progress, poll for completion. setup-token finishes
   // either on its own (loopback browser tab) or after the pasted code — both
@@ -327,14 +389,80 @@ export function AgentAuth({ engine, autoProbe = true, onAuthed }: Props) {
             </p>
           </div>
         ) : (
-          <div className="text-sm text-zinc-400 space-y-2">
-            <p>
-              Uses {docs.label}'s own login on this machine. Sign in once in a
-              terminal on the host, then re-check:
+          <div className="text-sm space-y-3">
+            {!authed && (
+              <p className="text-zinc-400">
+                Sign in with your ChatGPT/Codex subscription — no terminal needed.
+              </p>
+            )}
+            {!codexUrl ? (
+              <button
+                onClick={startCodexLogin}
+                disabled={codexBusy || checking}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded text-sm font-medium"
+              >
+                {codexBusy ? 'Starting…' : authed ? 'Sign in again' : 'Sign in with Codex'}
+              </button>
+            ) : (
+              <div className="space-y-3">
+                <ol className="list-decimal list-inside space-y-2 text-zinc-300">
+                  <li>
+                    Open this page and sign in:
+                    <div className="mt-1 flex gap-2">
+                      <a
+                        href={codexUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded text-xs font-medium"
+                      >
+                        Open sign-in page ↗
+                      </a>
+                      <button
+                        onClick={() => navigator.clipboard?.writeText(codexUrl)}
+                        className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded text-xs"
+                      >
+                        Copy link
+                      </button>
+                    </div>
+                  </li>
+                  <li>
+                    Enter this one-time code:
+                    <div className="mt-1 flex items-center gap-2">
+                      <code className="px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-base font-mono tracking-widest text-zinc-100">
+                        {codexCode}
+                      </code>
+                      <button
+                        onClick={() => codexCode && navigator.clipboard?.writeText(codexCode)}
+                        className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded text-xs"
+                      >
+                        Copy code
+                      </button>
+                    </div>
+                  </li>
+                </ol>
+                <div className="inline-flex items-center gap-2 text-zinc-400 text-xs">
+                  <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+                  Waiting for you to authorize…
+                </div>
+                <div>
+                  <button
+                    onClick={resetCodexLogin}
+                    className="text-zinc-500 hover:text-zinc-300 text-xs underline"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+            {codexErr && (
+              <pre className="bg-zinc-900 text-red-300/90 text-xs p-3 rounded overflow-auto whitespace-pre-wrap">
+                {codexErr}
+              </pre>
+            )}
+            <p className="text-xs text-zinc-600">
+              Prefer the terminal? Run <code className="text-zinc-400">codex login</code>{' '}
+              on the host instead.
             </p>
-            <pre className="bg-zinc-900 text-zinc-200 text-xs p-3 rounded overflow-auto whitespace-pre-wrap">
-              {docs.loginCmd}
-            </pre>
           </div>
         )
       ) : (
